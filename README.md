@@ -1,7 +1,12 @@
-# TheHerta
+# TheHerta 3.0系列
 
-- 支持从Blender 3.6LTS到5.1或更高的版本(最低3.6LTS)。
-- 第一次安装下载Release里的包或者自己打包源代码为zip文件安装，注意在部分电脑上，打包的文件夹和打包后的zip文件名中均不能出现横杠-或点.否则可能导致安装插件失败
-- 第一次安装后的后续版本更新可以在面板中一键更新。
+此插件仅适配SSMT 3.0系列，如追求稳定请使用SSMT 2.0系列：https://github.com/StarBobis/TheHerta
+
+
+# 注意事项
+
+- 仅支持Blender最新版本，功能不向下兼容低版本，所有开发都在Blender Nightly Build的Alpha版本中进行。
+- 仅适配SSMT 3.0系列，不兼容SSMT 2.0系列。
+- 几乎所有流程都与旧版本SSMT不相同，请勿在生产环境中使用。
 
 
