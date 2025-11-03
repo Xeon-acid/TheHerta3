@@ -212,15 +212,6 @@ def register():
 
     addon_updater_ops.register(bl_info)
     
-    # 3Dmigoto属性面板 注册
-    global migoto_draw_handler
-    # 注册 draw_handler，不传递 context 参数
-    migoto_draw_handler = SpaceView3D.draw_handler_add(
-        draw_migoto_overlay,
-        (),
-        'WINDOW',
-        'POST_PIXEL'
-    )
 
     # 在场景属性中存储图片列表和索引
     bpy.types.Scene.image_list = CollectionProperty(type=SSMT_ImportTexture_ImageListItem)
@@ -254,12 +245,6 @@ def unregister():
     del bpy.types.Scene.submesh_start
     del bpy.types.Scene.submesh_count
     
-    # 3Dmigoto属性面板 注册
-    global migoto_draw_handler
-    if migoto_draw_handler:
-        SpaceView3D.draw_handler_remove(migoto_draw_handler, 'WINDOW')
-        migoto_draw_handler = None
-
 
 if __name__ == "__main__":
     register()

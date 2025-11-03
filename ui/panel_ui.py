@@ -9,52 +9,6 @@ from ..utils.translate_utils import TR
 from ..config.plugin_config import PluginConfig
 
 
-# 3Dmigoto属性绘制
-def draw_migoto_overlay():
-    """在 3D 视图左下角绘制自定义信息"""
-    context = bpy.context  # 直接使用 bpy.context 获取完整上下文
-    if len(context.selected_objects) == 0:
-        return
-    
-    if not Properties_Global.show_obj_attributes():
-        return
-
-    obj = context.selected_objects[0]
-    region = context.region
-    font_id = 0  # 默认字体
-
-    # 设置绘制位置（左上角，稍微偏移避免遮挡默认信息）
-    x = 70
-    y = 60  # 从顶部往下偏移
-
-    # 获取自定义属性
-    gametypename = obj.get("3DMigoto:GameTypeName", None)
-    recalculate_tangent = obj.get("3DMigoto:RecalculateTANGENT", None)
-    recalculate_color = obj.get("3DMigoto:RecalculateCOLOR", None)
-
-    # 设置字体样式（可选）
-    blf.size(font_id, 24)  # 12pt 大小
-    blf.color(font_id, 1, 1, 1, 1)  # 白色
-
-    # 绘制文本
-    if gametypename:
-        y += 20
-        blf.position(font_id, x, y, 0)
-        blf.draw(font_id, f"GameType: {gametypename}")
-
-        y += 20
-        blf.position(font_id, x, y, 0)
-        blf.draw(font_id, f"Recalculate TANGENT: {recalculate_tangent}")
-        
-
-        y += 20
-        blf.position(font_id, x, y, 0)
-        blf.draw(font_id, f"Recalculate COLOR: {recalculate_color}")
-
-# 存储 draw_handler 引用，方便后续移除
-migoto_draw_handler = None
-
-
 
 
 
