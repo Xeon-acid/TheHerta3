@@ -18,7 +18,6 @@ importlib.reload(addon_updater_ops)
 from bpy.types import SpaceView3D
 
 # 全局配置
-from .config.properties_global import Properties_Global
 from .config.properties_import_model import Properties_ImportModel
 from .config.properties_generate_mod import Properties_GenerateMod
 from .config.properties_wwmi import Properties_WWMI
@@ -115,7 +114,6 @@ register_classes = (
     # 全局配置
     Properties_ImportModel,
     Properties_WWMI,
-    Properties_Global,
     Properties_GenerateMod,
     Properties_ExtractModel,
 
@@ -192,7 +190,6 @@ def register():
     bpy.types.Scene.properties_import_model = bpy.props.PointerProperty(type=Properties_ImportModel)
     bpy.types.Scene.properties_generate_mod = bpy.props.PointerProperty(type=Properties_GenerateMod)
     bpy.types.Scene.properties_extract_model = bpy.props.PointerProperty(type=Properties_ExtractModel)
-    bpy.types.Scene.properties_global =  bpy.props.PointerProperty(type=Properties_Global)
 
     bpy.types.VIEW3D_MT_object_context_menu.append(menu_func_migoto_right_click)
     bpy.types.OUTLINER_MT_collection.append(menu_dbmt_mark_collection_switch)
