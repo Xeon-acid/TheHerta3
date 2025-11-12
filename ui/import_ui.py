@@ -38,6 +38,9 @@ class PanelModelImportConfig(bpy.types.Panel):
         # 一键导入当前工作空间
         layout.operator("ssmt.import_all_from_workspace_v3",icon='IMPORT')
 
+        # 决定导入时是否调用法线贴图
+        layout.prop(context.scene.properties_import_model, "isUsingNormalMapWhileImporting", text="导入时使用法线贴图")
+
 
 class Import3DMigotoRaw(bpy.types.Operator, ImportHelper):
     """Import raw 3DMigoto vertex and index buffers"""

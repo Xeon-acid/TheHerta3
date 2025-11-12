@@ -676,20 +676,48 @@ class MeshImporter:
                     # 链接Alpha到Alpha
                     material.node_tree.links.new(bsdf.inputs['Alpha'], tex_image.outputs['Alpha'])
 
-                if normal_path is not None:
-                    norm_image = material.node_tree.nodes.new('ShaderNodeTexImage')
-                    norm_image.image = bpy.data.images.load(normal_path)
-                    norm_image.location.x = bsdf.location.x - 800
-                    norm_image.location.y = bsdf.location.y - 400
-                    norm_image.image.colorspace_settings.is_data = True
-                    norm_image.image.colorspace_settings.name = 'Non-Color'  # 设置为非颜色数据
+                if normal_path is not None and Properties_ImportModel.isUsingNormalMapWhileImporting():
+                    if not LogicName.ZZMI:
+                        norm_image = material.node_tree.nodes.new('ShaderNodeTexImage')
+                        norm_image.image = bpy.data.images.load(normal_path)
+                        norm_image.location.x = bsdf.location.x - 800
+                        norm_image.location.y = bsdf.location.y - 400
+                        norm_image.image.colorspace_settings.is_data = True
+                        norm_image.image.colorspace_settings.name = 'Non-Color'  # 设置为非颜色数据
 
-                    norm_map = material.node_tree.nodes.new('ShaderNodeNormalMap')
-                    norm_map.location.x = bsdf.location.x - 400
-                    norm_map.location.y = bsdf.location.y - 400
-                    norm_map.uv_map = "TEXCOORD.xy"
-                    material.node_tree.links.new(norm_map.inputs['Color'], norm_image.outputs['Color'])
-                    material.node_tree.links.new(bsdf.inputs['Normal'], norm_map.outputs['Normal'])
+                        norm_map = material.node_tree.nodes.new('ShaderNodeNormalMap')
+                        norm_map.location.x = bsdf.location.x - 400
+                        norm_map.location.y = bsdf.location.y - 400
+                        norm_map.uv_map = "TEXCOORD.xy"
+                        material.node_tree.links.new(norm_map.inputs['Color'], norm_image.outputs['Color'])
+                        material.node_tree.links.new(bsdf.inputs['Normal'], norm_map.outputs['Normal'])
+                    else:
+                        norm_image = material.node_tree.nodes.new('ShaderNodeTexImage')
+                        norm_image.image = bpy.data.images.load(normal_path)
+                        norm_image.location.x = bsdf.location.x - 1200
+                        norm_image.location.y = bsdf.location.y - 400
+                        norm_image.image.colorspace_settings.is_data = True
+                        norm_image.image.colorspace_settings.name = 'Non-Color'  # 设置为非颜色数据
+
+                        # 分离rgb
+                        norm_separate = material.node_tree.nodes.new('ShaderNodeSeparateColor')
+                        norm_separate.location.x = bsdf.location.x - 800
+                        norm_separate.location.y = bsdf.location.y - 400
+                        material.node_tree.links.new(norm_separate.inputs['Color'], norm_image.outputs['Color'])
+                        
+                        # 合并rg, zzz 法线贴图 b 通道不用于法线
+                        norm_combine = material.node_tree.nodes.new('ShaderNodeCombineColor')
+                        norm_combine.location.x = bsdf.location.x - 600
+                        norm_combine.location.y = bsdf.location.y - 400
+                        material.node_tree.links.new(norm_combine.inputs['Red'], norm_separate.outputs['Red'])
+                        material.node_tree.links.new(norm_combine.inputs['Green'], norm_separate.outputs['Green'])
+
+                        norm_map = material.node_tree.nodes.new('ShaderNodeNormalMap')
+                        norm_map.location.x = bsdf.location.x - 400
+                        norm_map.location.y = bsdf.location.y - 400
+                        norm_map.uv_map = "TEXCOORD.xy"
+                        material.node_tree.links.new(norm_map.inputs['Color'], norm_combine.outputs['Color'])
+                        material.node_tree.links.new(bsdf.inputs['Normal'], norm_map.outputs['Normal'])
 
 
 
