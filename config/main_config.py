@@ -150,10 +150,14 @@ class GlobalConfig:
     def path_appdata_local(cls):
         return os.path.join(os.environ['LOCALAPPDATA'])
     
+    @classmethod
+    def path_ssmt3_global_configs_folder(cls):
+        return os.path.join(GlobalConfig.path_appdata_local(),"SSMT3GlobalConfigs\\")
+    
     # 定义基础的Json文件路径
     @classmethod
     def path_main_json(cls):
-        return os.path.join(GlobalConfig.path_appdata_local(), "SSMT3-Config.json")
+        return os.path.join(GlobalConfig.path_ssmt3_global_configs_folder(), "SSMT3-Config.json")
         
 
 
