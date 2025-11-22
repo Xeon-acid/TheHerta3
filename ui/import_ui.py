@@ -48,6 +48,7 @@ class PanelModelImportConfig(bpy.types.Panel):
         layout.prop(context.scene.properties_import_model, "isUsingNormalMapWhileImporting", text="导入时使用法线贴图")
 
 
+
 class Import3DMigotoRaw(bpy.types.Operator, ImportHelper):
     """Import raw 3DMigoto vertex and index buffers"""
     bl_idname = "import_mesh.migoto_raw_buffers_mmt"

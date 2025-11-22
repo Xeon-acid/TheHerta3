@@ -167,14 +167,12 @@ register_classes = (
 
     SSMTSelectGenerateModFolder,
 
-    SSMT_UL_FastImportTextureList,
-    SSMT_ImportTexture_ImageListItem,
-    SSMT_ImportTexture_VIEW3D_PT_ImageMaterialPanel,
-    SSMT_ImportTexture_WM_OT_ApplyImageToMaterial,
-    SSMT_ImportTexture_WM_OT_RefreshPreviews,
-    SSMT_ImportTexture_WM_OT_SelectImageFolder,
-    SSMT_ImportTexture_WM_OT_AutoDetectTextureFolder,
-    SSMTImportAllReversed,
+    Sword_UL_FastImportTextureList,
+    Sword_ImportTexture_ImageListItem,
+    Sword_ImportTexture_VIEW3D_PT_ImageMaterialPanel,
+    Sword_ImportTexture_WM_OT_ApplyImageToMaterial,
+    Sword_ImportTexture_WM_OT_SelectImageFolder,
+    SwordImportAllReversed,
 )
 
 
@@ -223,8 +221,8 @@ def register():
     
 
     # 在场景属性中存储图片列表和索引
-    bpy.types.Scene.image_list = CollectionProperty(type=SSMT_ImportTexture_ImageListItem)
-    bpy.types.Scene.image_list_index = IntProperty(default=0)
+    bpy.types.Scene.sword_image_list = CollectionProperty(type=Sword_ImportTexture_ImageListItem)
+    bpy.types.Scene.sword_image_list_index = IntProperty(default=0)
 
 
 
@@ -240,8 +238,8 @@ def unregister():
         bpy.utils.unregister_class(cls)
     
     # 删除场景属性
-    del bpy.types.Scene.image_list
-    del bpy.types.Scene.image_list_index
+    del bpy.types.Scene.sword_image_list
+    del bpy.types.Scene.sword_image_list_index
 
 
 
@@ -264,8 +262,6 @@ def unregister():
                 if kmi.idname in [SSMTImportAllFromCurrentWorkSpaceV3.bl_idname, SSMTGenerateMod.bl_idname]:
                     km.keymap_items.remove(kmi)
     
-    # for clss in reversed(cls):
-    #     bpy.utils.unregister_class(clss)
 
     
 

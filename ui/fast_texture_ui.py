@@ -1,3 +1,16 @@
+'''
+Nico:
+快速上贴图技术
+不过这次是通过在小窗口里手动选择的方式来快速上贴图
+一般用于WWMI这种UE类型的只使用固定的Hash风格贴图的游戏
+这种游戏一个Mod的贴图有二十多个，然后在使用槽位风格时也很容易发生窜槽位的情况
+一般没人愿意费劲维护一个类似ORFix的东西，因为ORFix本质上是苦力活
+所以基本上最后都会用Hash风格贴图，而Hash风格贴图的话，使用贴图标记就完全是吃力不讨好的行为。
+目前我们对WWMI使用的是基于RenderTextures的贴图生成
+所以必须有一种不需要标记就能快速上贴图的方法
+所以这个功能诞生了
+'''
+
 import bpy
 import os
 import shutil
@@ -14,17 +27,17 @@ from ..utils.json_utils import JsonUtils
 from ..utils.collection_utils import CollectionUtils,CollectionColor
 
 # 存储预览图集合
-preview_collections = {}
+fast_preview_collections = {}
 
 # 定义图片列表项
-class Sword_ImportTexture_ImageListItem(PropertyGroup):
+class SSMT_ImportTexture_ImageListItem(PropertyGroup):
     name: StringProperty(name="Image Name") # type: ignore
     filepath: StringProperty(name="File Path") # type: ignore
 
 # 自定义UI列表显示图片和缩略图
-class Sword_UL_FastImportTextureList(UIList):
+class SSMT_UL_FastImportTextureList(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
-        pcoll = preview_collections["main"]
+        pcoll = fast_preview_collections["main"]
         
         if self.layout_type in {'DEFAULT', 'Expand'}:
             # 尝试获取预览图标
@@ -42,51 +55,11 @@ class Sword_UL_FastImportTextureList(UIList):
             else:
                 layout.label(text="", icon='IMAGE_DATA')
 
-# 选择文件夹操作符
-class Sword_ImportTexture_WM_OT_SelectImageFolder(Operator, ImportHelper):
-    bl_idname = "wm.select_image_folder"
-    bl_label = TR.translate("选择预览贴图所在的文件夹位置")
-    
-    directory: StringProperty(subtype='DIR_PATH') # type: ignore
-    filter_folder: BoolProperty(default=True, options={'HIDDEN'}) # type: ignore
-    filter_image: BoolProperty(default=False, options={'HIDDEN'}) # type: ignore
-
-    def execute(self, context):
-        # 清空之前的列表
-        context.scene.sword_image_list.clear()
-        
-        # 清空预览集合
-        pcoll = preview_collections["main"]
-        pcoll.clear()
-        
-        # 支持的图片格式
-        image_extensions = ('.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.tga', '.exr', '.hdr','.dds')
-        
-        # 遍历文件夹，收集图片文件
-        image_count = 0
-        for filename in os.listdir(self.directory):
-            if filename.lower().endswith(image_extensions):
-                full_path = os.path.join(self.directory, filename)
-                if os.path.isfile(full_path):
-                    item = context.scene.sword_image_list.add()
-                    item.name = filename
-                    item.filepath = full_path
-                    
-                    # 加载预览图
-                    try:
-                        thumb = pcoll.load(filename, full_path, 'IMAGE')
-                        image_count += 1
-                    except Exception as e:
-                        print(f"Could not load preview for {filename}: {e}")
-        
-        self.report({'INFO'}, f"Scanned {image_count} images.")
-        return {'FINISHED'}
-    
 
 def reload_textures_from_folder(picture_folder_path:str):
     # 清空之前的列表和预览
-    bpy.context.scene.sword_image_list.clear()
-    pcoll = preview_collections["main"]
+    bpy.context.scene.image_list.clear()
+    pcoll = fast_preview_collections["main"]
     pcoll.clear()
     
     # 支持的图片格式
@@ -98,7 +71,7 @@ def reload_textures_from_folder(picture_folder_path:str):
         if filename.lower().endswith(image_extensions):
             full_path = os.path.join(picture_folder_path, filename)
             if os.path.isfile(full_path):
-                item = bpy.context.scene.sword_image_list.add()
+                item = bpy.context.scene.image_list.add()
                 item.name = filename
                 item.filepath = full_path
                 
@@ -111,8 +84,9 @@ def reload_textures_from_folder(picture_folder_path:str):
 
 
 # 自动检测并设置DedupedTextures_jpg文件夹
-class Sword_ImportTexture_WM_OT_AutoDetectTextureFolder(Operator):
-    bl_idname = "wm.auto_detect_texture_folder"
+# 这个可以用于参考
+class SSMT_ImportTexture_WM_OT_AutoDetectTextureFolder(Operator):
+    bl_idname = "ssmt.auto_detect_texture_folder"
     bl_label = TR.translate("自动检测提取的贴图文件夹")
     
     def execute(self, context):
@@ -128,35 +102,30 @@ class Sword_ImportTexture_WM_OT_AutoDetectTextureFolder(Operator):
         # 构建路径
         selected_drawib_folder_path = os.path.join(GlobalConfig.path_workspace_folder(),  obj_name.split("-")[0] + "\\"  )
         
-        deduped_textures_jpg_folder_path = os.path.join(selected_drawib_folder_path, "DedupedTextures_jpg\\")
-        deduped_textures_png_folder_path = os.path.join(selected_drawib_folder_path, "DedupedTextures_png\\")
-        deduped_textures_tga_folder_path = os.path.join(selected_drawib_folder_path, "DedupedTextures_tga\\")
+        deduped_textures_folder_path = os.path.join(selected_drawib_folder_path, "DedupedTextures\\")
 
-        deduped_textures_jpg_exists = os.path.exists(deduped_textures_jpg_folder_path)
-        deduped_textures_png_exists = os.path.exists(deduped_textures_png_folder_path)
-        deduped_textures_tga_exists = os.path.exists(deduped_textures_tga_folder_path)
+        deduped_textures_exists = os.path.exists(deduped_textures_folder_path)
 
-        
         # 检查路径是否存在
-        if not deduped_textures_jpg_exists and not deduped_textures_png_exists and not deduped_textures_tga_exists:
+        if not deduped_textures_exists:
             self.report({'ERROR'}, TR.translate("未找到当前DrawIB: " + obj_name.split("-")[0] + "的DedupedTextures转换后的贴图文件夹，请确保此IB在当前工作空间中已经正常提取出来了"))
             return {'CANCELLED'}
         
         # 清空之前的列表和预览
-        context.scene.sword_image_list.clear()
-        pcoll = preview_collections["main"]
+        context.scene.image_list.clear()
+        pcoll = fast_preview_collections["main"]
         pcoll.clear()
         
         # 支持的图片格式
-        image_extensions = ('.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.tga', '.exr', '.hdr','.dds')
+        image_extensions = ('.dds')
         
         # 遍历文件夹，收集图片文件
         image_count = 0
-        for filename in os.listdir(deduped_textures_jpg_folder_path):
+        for filename in os.listdir(deduped_textures_folder_path):
             if filename.lower().endswith(image_extensions):
-                full_path = os.path.join(deduped_textures_jpg_folder_path, filename)
+                full_path = os.path.join(deduped_textures_folder_path, filename)
                 if os.path.isfile(full_path):
-                    item = context.scene.sword_image_list.add()
+                    item = context.scene.image_list.add()
                     item.name = filename
                     item.filepath = full_path
                     
@@ -173,19 +142,19 @@ class Sword_ImportTexture_WM_OT_AutoDetectTextureFolder(Operator):
 
 
 # 应用图片到材质操作符
-class Sword_ImportTexture_WM_OT_ApplyImageToMaterial(Operator):
-    bl_idname = "wm.apply_image_to_material"
-    bl_label = "应用贴图到选中的物体"
+class SSMT_ImportTexture_WM_OT_ApplyImageToMaterial(Operator):
+    bl_idname = "ssmt.apply_image_to_material"
+    bl_label = "Apply Image to Selected Objects"
     
     def execute(self, context):
         scene = context.scene
-        selected_index = scene.sword_image_list_index
+        selected_index = scene.image_list_index
         
-        if selected_index < 0 or selected_index >= len(scene.sword_image_list):
+        if selected_index < 0 or selected_index >= len(scene.image_list):
             self.report({'ERROR'}, "No image selected in the list.")
             return {'CANCELLED'}
         
-        selected_image = scene.sword_image_list[selected_index]
+        selected_image = scene.image_list[selected_index]
         image_path = selected_image.filepath
         
         # 获取或创建图像数据块
@@ -256,59 +225,9 @@ class Sword_ImportTexture_WM_OT_ApplyImageToMaterial(Operator):
         return {'FINISHED'}
 
 
-class SwordImportAllReversed(bpy.types.Operator):
-    bl_idname = "ssmt.import_all_reverse"
-    bl_label = TR.translate("一键导入逆向出来的全部模型")
-    bl_description = "把上一次一键逆向出来的所有模型全部导入到Blender，然后你可以手动筛选并删除错误的数据类型，流程上更加方便。"
-
-    def execute(self, context):
-        reverse_output_folder_path = GlobalConfig.path_reverse_output_folder()
-        if not os.path.exists(reverse_output_folder_path):
-            self.report({"ERROR"},"当前一键逆向结果中标注的文件夹位置不存在，请重新运行一键逆向")
-            return {'FINISHED'}
-        print("测试导入")
-
-        total_folder_name = os.path.basename(reverse_output_folder_path)
-
-        reverse_collection = CollectionUtils.create_new_collection(collection_name=total_folder_name,color_tag=CollectionColor.Red)
-        bpy.context.scene.collection.children.link(reverse_collection)
-
-        # 获取所有子文件夹
-        subfolder_path_list = [f.path for f in os.scandir(reverse_output_folder_path) if f.is_dir()]
-
-        for subfolder_path in subfolder_path_list:
-            
-            datatype_folder_name = os.path.basename(subfolder_path)
-
-            datatype_collection = CollectionUtils.create_new_collection(collection_name=datatype_folder_name,color_tag=CollectionColor.White, link_to_parent_collection_name=reverse_collection.name)
-
-            # 获取所有.fmt文件
-            fmt_files = []
-            for file in os.listdir(subfolder_path):
-                if file.endswith('.fmt'):
-                    fmt_files.append(os.path.join(subfolder_path, file))
-
-            for fmt_filepath in fmt_files:
-                # 获取带后缀的文件名
-                filename_with_extension = os.path.basename(fmt_filepath)
-                # 去掉后缀
-                filename_without_extension = os.path.splitext(filename_with_extension)[0]
-                # 调用导入功能
-                mbf = MigotoBinaryFile(fmt_path=fmt_filepath,mesh_name=filename_without_extension)
-                obj_result = MeshImporter.create_mesh_obj_from_mbf(mbf=mbf)
-
-                datatype_collection.objects.link(obj_result)
-                # 这里先链接SourceCollection，确保它在上面
-
-        # 随后把图片路径指定为当前路径
-        reload_textures_from_folder(reverse_output_folder_path)
-
-        return {'FINISHED'}
-
-
 # 面板UI布局
-class Sword_ImportTexture_VIEW3D_PT_ImageMaterialPanel(Panel):
-    bl_label = "3Dmigoto-Sword面板"
+class SSMT_ImportTexture_VIEW3D_PT_ImageMaterialPanel(Panel):
+    bl_label = "快速上预览贴图"
     bl_idname = "VIEW3D_PT_image_material_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -319,30 +238,31 @@ class Sword_ImportTexture_VIEW3D_PT_ImageMaterialPanel(Panel):
         layout = self.layout
         scene = context.scene
 
-        # 一键导入逆向结果按钮
-        layout.operator("ssmt.import_all_reverse")
-
         # 自动检测按钮
         row = layout.row()
+
+        # TODO 这里应该根据选中的object来根据它的DrawIB和Component数量，自动过滤DedupedTextures里的贴图文件
+
+        row.operator("wm.auto_detect_texture_folder", icon='FILE_REFRESH')
 
         # 文件夹选择按钮
         row = layout.row()
         row.operator("wm.select_image_folder", icon='FILE_FOLDER')
         
         # 显示图片数量信息
-        if scene.sword_image_list:
-            layout.label(text=f"Found {len(scene.sword_image_list)} images")
+        if scene.image_list:
+            layout.label(text=f"Found {len(scene.image_list)} images")
         
         # 显示图片列表
-        if scene.sword_image_list:
+        if scene.image_list:
             row = layout.row()
             row.template_list(
                 "SSMT_UL_FastImportTextureList",  # 修正为正确的类名
                 "Image List", 
                 scene, 
-                "sword_image_list", 
+                "image_list", 
                 scene, 
-                "sword_image_list_index",
+                "image_list_index",
                 rows=6
             )
         else:
@@ -353,12 +273,11 @@ class Sword_ImportTexture_VIEW3D_PT_ImageMaterialPanel(Panel):
         row.operator("wm.apply_image_to_material", icon='MATERIAL_DATA')
         
         # 显示当前选中图片的预览
-        if scene.sword_image_list and scene.sword_image_list_index >= 0 and scene.sword_image_list_index < len(scene.sword_image_list):
-            selected_item = scene.sword_image_list[scene.sword_image_list_index]
-            pcoll = preview_collections["main"]
+        if scene.image_list and scene.image_list_index >= 0 and scene.image_list_index < len(scene.image_list):
+            selected_item = scene.image_list[scene.image_list_index]
+            pcoll = fast_preview_collections["main"]
             
             if selected_item.name in pcoll:
                 box = layout.box()
                 box.label(text="Preview:")
                 box.template_icon(icon_value=pcoll[selected_item.name].icon_id, scale=10.0)
-                
