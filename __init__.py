@@ -7,6 +7,7 @@ from .ui.collection_rightclick_ui import *
 from .ui.migoto_sword_ui import *
 from .ui.export_ui import SSMTGenerateMod, PanelGenerateModConfig, SSMTSelectGenerateModFolder
 from .ui.import_ui import Import3DMigotoRaw, SSMTImportAllFromCurrentWorkSpaceV3, PanelModelImportConfig
+from .ui.fast_texture_ui import *
 
 # 自动更新功能
 from . import addon_updater_ops
@@ -28,7 +29,7 @@ bl_info = {
     "name": "TheHerta3",
     "description": "SSMT3.0 Series's Blender Plugin.",
     "blender": (5, 1, 0),
-    "version": (3, 0, 7),
+    "version": (3, 0, 8),
     "location": "View3D",
     "category": "Generic"
 }
@@ -173,6 +174,12 @@ register_classes = (
     Sword_ImportTexture_WM_OT_ApplyImageToMaterial,
     Sword_ImportTexture_WM_OT_SelectImageFolder,
     SwordImportAllReversed,
+
+    SSMT_UL_FastImportTextureList,
+    SSMT_ImportTexture_WM_OT_ApplyImageToMaterial,
+    SSMT_ImportTexture_VIEW3D_PT_ImageMaterialPanel,
+    SSMT_ImportTexture_WM_OT_AutoDetectTextureFolder,
+    SSMT_FastTexture_ComponentOnly,
 )
 
 
@@ -180,6 +187,9 @@ def register():
     # 创建预览集合
     pcoll = bpy.utils.previews.new()
     preview_collections["main"] = pcoll
+
+    fast_pcoll = bpy.utils.previews.new()
+    fast_preview_collections["main"] = fast_pcoll
 
     for cls in register_classes:
         bpy.utils.register_class(cls)
@@ -224,6 +234,10 @@ def register():
     bpy.types.Scene.sword_image_list = CollectionProperty(type=Sword_ImportTexture_ImageListItem)
     bpy.types.Scene.sword_image_list_index = IntProperty(default=0)
 
+    # 在场景属性中存储图片列表和索引
+    bpy.types.Scene.image_list = CollectionProperty(type=Sword_ImportTexture_ImageListItem)
+    bpy.types.Scene.image_list_index = IntProperty(default=0)
+
 
 
 
@@ -234,6 +248,10 @@ def unregister():
         bpy.utils.previews.remove(pcoll)
     preview_collections.clear()
 
+    for pcoll in fast_preview_collections.values():
+        bpy.utils.previews.remove(pcoll)
+    fast_preview_collections.clear()
+
     for cls in reversed(register_classes):
         bpy.utils.unregister_class(cls)
     
@@ -241,6 +259,8 @@ def unregister():
     del bpy.types.Scene.sword_image_list
     del bpy.types.Scene.sword_image_list_index
 
+    del bpy.types.Scene.image_list
+    del bpy.types.Scene.image_list_index
 
 
     addon_updater_ops.unregister()
