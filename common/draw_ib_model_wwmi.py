@@ -3,7 +3,6 @@ import numpy
 
 
 
-from ..common.migoto_format import *
 
 from ..utils.config_utils import ConfigUtils
 from ..utils.collection_utils import *
@@ -16,9 +15,10 @@ from ..utils.shapekey_utils import ShapeKeyUtils
 from ..utils.log_utils import LOG
 
 from .extracted_object import ExtractedObject, ExtractedObjectHelper
-from ..common.migoto_format import M_DrawIndexed
 from ..base.obj_data_model import ObjDataModel
 from ..base.component_model import ComponentModel
+from ..base.d3d11_gametype import D3D11GameType
+from ..base.m_draw_indexed import M_DrawIndexed
 
 from ..config.import_config import ImportConfig
 from .obj_buffer_model import ObjBufferModel

@@ -1,4 +1,6 @@
-from ..common.migoto_format import M_Condition, M_DrawIndexed
+from .m_condition import M_Condition
+from .m_draw_indexed import M_DrawIndexed
+
 
 from dataclasses import dataclass, field
 

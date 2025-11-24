@@ -15,7 +15,7 @@ from ..utils.format_utils import Fatal
 
 from .main_config import GlobalConfig
 
-from ..common.migoto_format import D3D11GameType
+from ..base.d3d11_gametype import D3D11GameType
 
 @dataclass
 class TextureMarkUpInfo:

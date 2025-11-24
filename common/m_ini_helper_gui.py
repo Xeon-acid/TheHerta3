@@ -5,7 +5,7 @@ import shutil
 from ..common.m_ini_builder import *
 from ..config.main_config import GlobalConfig
 from ..config.properties_generate_mod import Properties_GenerateMod
-from ..common.migoto_format import M_Key
+from ..base.m_key import M_Key
 from ..base.obj_data_model import ObjDataModel
 
 class M_IniHelperGUI:

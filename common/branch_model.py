@@ -6,29 +6,20 @@ from ..utils.log_utils import LOG
 from ..utils.collection_utils import CollectionUtils, CollectionColor
 from ..utils.config_utils import ConfigUtils
 
-from ..common.migoto_format import M_Key, M_Condition, D3D11GameType
+
+from ..base.m_key import M_Key
+from ..base.m_condition import M_Condition
+from ..base.d3d11_gametype import D3D11GameType
+
+
 from ..utils.tips_utils import TipUtils
 
 from ..base.obj_data_model import ObjDataModel
 
 from .obj_buffer_model import ObjBufferModel
 
+from ..base.m_global_key_counter import M_GlobalKeyCounter
 
-
-class M_GlobalKeyCounter:
-    '''
-    在新版的生成Mod架构中用于统计一个Mod中全局的按键索引
-    以及当前生成Mod的数量，每个DrawIB都是一个Mod。
-    使用全局变量来避免过于复杂的变量传递。
-    '''
-
-    global_key_index:int = 0
-    generated_mod_number:int = 0
-
-    @classmethod
-    def initialize(cls):        
-        cls.global_key_index = 0
-        cls.generated_mod_number = 0
 
 
 class BranchModel:
