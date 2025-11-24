@@ -73,17 +73,6 @@ class DrawIBModelWWMI:
             self.component_name_component_model_dict[component_model.component_name] = component_model
         LOG.newline()
 
-        # TODO 在这里遍历获取每个Component的obj列表，然后对这些obj进行统计，统计BLENDINDICES和BLENDWEIGHTS
-        # 生成BlendRemapForward.buf中的内容
-        # 每个Component 每512个数字为一组，有几个Component就有几组 格式：R16_UINT
-        # 对应的位数就是局部顶点索引
-        # 对应的位上的内容就是原始的顶点组索引
-        
-        # 需要一个方法，能够获取指定obj的所有的d3d11Element内容。
-        # 其次就是可能要考虑到先声明数据类型，后进行执行的问题，比如WWMI就是把所有的数据类型提前全部声明好
-        # 最后需要的时候只执行一次就把所有的内容都拿到了，本质上是数据类型设计的比较好。
-        
-
 
         # (4) 根据之前解析集合架构的结果，读取obj对象内容到字典中
         self.mesh_vertex_count = 0 # 每个DrawIB都有总的顶点数，对应CategoryBuffer里的顶点数。
@@ -121,15 +110,31 @@ class DrawIBModelWWMI:
         obj_buffer_model = ObjBufferModel(d3d11_game_type=self.d3d11GameType,obj_name=merged_obj.name)
         TimerUtils.End("构建ObjBufferModel")
 
+        # TODO 如果Merged架构下，顶点组数量超过了255，则必须使用Remap技术
+        # 在这里遍历获取每个Component的obj列表，然后对这些obj进行统计，统计BLENDINDICES和BLENDWEIGHTS
+        # 生成BlendRemapForward.buf中的内容
+        # 每个Component 每512个数字为一组，有几个Component就有几组 格式：R16_UINT
+        # 对应的位数就是局部顶点索引
+        # 对应的位上的内容就是原始的顶点组索引
+        
+        # 需要一个方法，能够获取指定obj的所有的d3d11Element内容。
+        # 其次就是可能要考虑到先声明数据类型，后进行执行的问题，比如WWMI就是把所有的数据类型提前全部声明好
+        # 最后需要的时候只执行一次就把所有的内容都拿到了，本质上是数据类型设计的比较好。
+
+        # 因为MergedObj已经全部合并在一起了
+        # 也许我们可以更改一下合并的流程，让它们先把每个Component的合并在一起，得到一个Obj列表
+        # 此时就可以根据这个obj列表，获取其属性，然后决定是否要使用remap技术
+        # 然后记录在mergedobj的属性里，然后再把这几个单独component的合并在一起
+        # 最后得到mergedobj，同时也把生成BlendRemapForward.buf和BlendRemapReverse.buf的信息获取到了
+        # 最后再根据mergedobj来获取生成BlendRemapVertexVG.buf的信息
+        # 大概就是这个思路，所以build_merged_obj这个流程还需要深入理解并且做一些修改，才能实现remap技术
+        
+
         # 写出到文件
         self.write_out_index_buffer(ib=obj_buffer_model.ib)
         self.write_out_category_buffer(category_buffer_dict=obj_buffer_model.category_buffer_dict)
         self.write_out_shapekey_buffer(merged_obj=merged_obj, index_vertex_id_dict=obj_buffer_model.index_vertex_id_dict)
 
-        # TODO 如果Merged架构下，顶点组数量超过了255，则必须使用Remap技术
-        # 则必须判断每个Component，但是这里已经获取不到每个Component的数据了。
-        # 所以必须往前几个步骤去想办法
-        
         # 删除临时融合的obj对象
         bpy.data.objects.remove(merged_obj, do_unlink=True)
 
@@ -220,8 +225,7 @@ class DrawIBModelWWMI:
         '''
         extracted_object 用于读取配置
         
-        这个代码有个问题就是，它只是面向一个DrawIB的，所以在调用的时候得在branch_model的drawib循环中调用，对每个drawib都生成临时obj
-        然后生成mod
+        此方法用于为当前DrawIB构建MergedObj对象
         '''
         print("build_merged_object::")
 
@@ -278,7 +282,8 @@ class DrawIBModelWWMI:
         index_offset = 0
         # 这里的component_id是从0开始的，务必注意
         for component_id, component in enumerate(components):
-
+            
+            # TODO 为什么排序？
             component.objects.sort(key=lambda x: x.name)
 
             for temp_object in component.objects:
@@ -305,10 +310,10 @@ class DrawIBModelWWMI:
                         ShapeKeyUtils.apply_modifiers_for_object_with_shape_keys(bpy.context, selected_modifiers, None)
 
                 # Triangulate temporary object, this step is crucial as export supports only triangles
-                triangulate_object(bpy.context, temp_obj)
+                ObjUtils.triangulate_object(bpy.context, temp_obj)
 
                 # Handle Vertex Groups
-                vertex_groups = get_vertex_groups(temp_obj)
+                vertex_groups = ObjUtils.get_vertex_groups(temp_obj)
 
                 # Remove ignored or unexpected vertex groups
                 if Properties_WWMI.import_merged_vgmap():
@@ -324,7 +329,7 @@ class DrawIBModelWWMI:
                 remove_vertex_groups(temp_obj, ignore_list)
 
                 # Rename VGs to their indicies to merge ones of different components together
-                for vg in get_vertex_groups(temp_obj):
+                for vg in ObjUtils.get_vertex_groups(temp_obj):
                     vg.name = str(vg.index)
 
                 # Calculate vertex count of temporary object
@@ -349,17 +354,17 @@ class DrawIBModelWWMI:
             vertex_count += component.vertex_count
             index_count += component.index_count
             
-        join_objects(bpy.context, merged_object)
+        ObjUtils.join_objects(bpy.context, merged_object)
 
         obj = merged_object[0]
 
-        rename_object(obj, 'TEMP_EXPORT_OBJECT')
+        ObjUtils.rename_object(obj, 'TEMP_EXPORT_OBJECT')
 
         deselect_all_objects()
         select_object(obj)
         set_active_object(bpy.context, obj)
 
-        mesh = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh()
+        mesh = ObjUtils.get_mesh_evaluate_from_obj(obj)
 
         merged_object = MergedObject(
             object=obj,
@@ -367,7 +372,7 @@ class DrawIBModelWWMI:
             components=components,
             vertex_count=len(obj.data.vertices),
             index_count=len(obj.data.polygons) * 3,
-            vg_count=len(get_vertex_groups(obj)),
+            vg_count=len(ObjUtils.get_vertex_groups(obj)),
             shapekeys=MergedObjectShapeKeys(),
         )
 

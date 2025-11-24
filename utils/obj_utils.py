@@ -14,18 +14,10 @@ from .format_utils import Fatal
 from operator import attrgetter, itemgetter
 
 
-def assert_object(obj):
-    if isinstance(obj, str):
-        obj = get_object(obj)
-    elif obj not in bpy.data.objects.values():
-        raise ValueError('Not of object type: %s' % str(obj))
-    return obj
-
 
 def get_mode(context):
     if context.active_object:
         return context.active_object.mode
-
 
 def set_mode(context, mode):
     active_object = get_active_object(context)
@@ -61,8 +53,7 @@ def set_user_context(context, user_context):
         set_mode(context, user_context.mode)
 
 
-def get_object(obj_name):
-    return bpy.data.objects[obj_name]
+
         
 
 def get_active_object(context):
@@ -86,29 +77,27 @@ def object_exists(obj_name):
 
 
 def link_object_to_collection(obj, col):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     col = assert_collection(col)
     col.objects.link(obj)
 
 
 def unlink_object_from_collection(obj, col):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     col = assert_collection(col)
     col.objects.unlink(obj) 
 
 
-def rename_object(obj, obj_name):
-    obj = assert_object(obj)
-    obj.name = obj_name
+
     
 
 def select_object(obj):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     obj.select_set(True)
 
 
 def deselect_object(obj):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     obj.select_set(False)
 
 
@@ -123,7 +112,7 @@ def object_is_selected(obj):
 
 
 def set_active_object(context, obj):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     context.view_layer.objects.active = obj
 
 
@@ -132,27 +121,27 @@ def object_is_hidden(obj):
 
 
 def hide_object(obj):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     obj.hide_set(True)
 
 
 def unhide_object(obj):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     obj.hide_set(False)
 
 
 def set_custom_property(obj, property, value):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     obj[property] = value
 
 
 def remove_object(obj):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     bpy.data.objects.remove(obj, do_unlink=True)
 
 
 def get_modifiers(obj):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     return obj.modifiers
 
 
@@ -171,19 +160,17 @@ def copy_object(context, obj, name=None, collection=None):
 
 
 def assert_vertex_group(obj, vertex_group):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     if isinstance(vertex_group, bpy.types.VertexGroup):
         vertex_group = vertex_group.name
     return obj.vertex_groups[vertex_group]
 
 
-def get_vertex_groups(obj):
-    obj = assert_object(obj)
-    return obj.vertex_groups
+
 
 
 def remove_vertex_groups(obj, vertex_groups):
-    obj = assert_object(obj)
+    obj = ObjUtils.assert_object(obj)
     for vertex_group in vertex_groups:
         obj.vertex_groups.remove(assert_vertex_group(obj, vertex_group))
 
@@ -193,20 +180,13 @@ def normalize_all_weights(context, obj):
         bpy.ops.object.vertex_group_normalize_all()
 
 
-def triangulate_object(context, obj):
-    with OpenObject(context, obj, mode='OBJECT') as obj:
-        me = obj.data
-        bm = bmesh.new()
-        bm.from_mesh(me)
-        bmesh.ops.triangulate(bm, faces=bm.faces[:])
-        bm.to_mesh(me)
-        bm.free()
+
 
 
 class OpenObjects:
     def __init__(self, context, objects, mode='OBJECT'):
         self.mode = mode
-        self.objects = [assert_object(obj) for obj in objects]
+        self.objects = [ObjUtils.assert_object(obj) for obj in objects]
         self.context = context
         self.user_context = get_user_context(context)
 
@@ -259,17 +239,7 @@ def get_vertex_groups_from_bmesh(bm: bmesh.types.BMesh):
     layer_deform = bm.verts.layers.deform.active
     return [sorted(vert[layer_deform].items(), key=itemgetter(1), reverse=True) for vert in bm.verts]
 
-def join_objects(context, objects):
-    if len(objects) == 1:
-        return
-    unused_meshes = []
-    with OpenObject(context, objects[0], mode='OBJECT'):
-        for obj in objects[1:]:
-            unused_meshes.append(obj.data)
-            select_object(obj)  
-            bpy.ops.object.join()
-    for mesh in unused_meshes:
-        remove_mesh(mesh)
+
 
 
 def get_collection(col_name):
@@ -391,7 +361,7 @@ class MergedObject:
 class OpenObject:
     def __init__(self, context, obj, mode='OBJECT'):
         self.mode = mode
-        self.object = assert_object(obj)
+        self.object = ObjUtils.assert_object(obj)
         self.context = context
         self.user_context = get_user_context(context)
         self.was_hidden = object_is_hidden(self.object)
@@ -419,6 +389,57 @@ class OpenObject:
 
 
 class ObjUtils:
+
+    @staticmethod
+    def rename_object(obj, obj_name):
+        obj = ObjUtils.assert_object(obj)
+        obj.name = obj_name
+
+    @staticmethod
+    def join_objects(context, objects):
+        '''
+        Nico: 卧槽，居然用的是原始的join，我之前的思路是直接对每个obj获取buffer属性然后拼接
+        怪不得之前的思路做出来有毛病呢
+        TODO 所以说后面WWMI的统计每个Component的顶点组部分得用这种join技术才行
+        '''
+        if len(objects) == 1:
+            return
+        unused_meshes = []
+        with OpenObject(context, objects[0], mode='OBJECT'):
+            for obj in objects[1:]:
+                unused_meshes.append(obj.data)
+                select_object(obj)  
+                bpy.ops.object.join()
+        for mesh in unused_meshes:
+            remove_mesh(mesh)
+
+    @staticmethod
+    def get_vertex_groups(obj):
+        obj = ObjUtils.assert_object(obj)
+        return obj.vertex_groups
+
+    @staticmethod
+    def triangulate_object(context, obj):
+        with OpenObject(context, obj, mode='OBJECT') as obj:
+            me = obj.data
+            bm = bmesh.new()
+            bm.from_mesh(me)
+            bmesh.ops.triangulate(bm, faces=bm.faces[:])
+            bm.to_mesh(me)
+            bm.free()
+
+    @staticmethod
+    def assert_object(obj)->bpy.types.Object:
+        if isinstance(obj, str):
+            obj = ObjUtils.get_object(obj)
+        elif obj not in bpy.data.objects.values():
+            raise ValueError('Not of object type: %s' % str(obj))
+        return obj
+
+
+    @staticmethod
+    def get_object(obj_name)->bpy.types.Object:
+        return bpy.data.objects[obj_name]
 
     @staticmethod
     def select_obj(target_obj:bpy.types.Object):
