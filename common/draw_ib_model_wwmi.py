@@ -1,7 +1,7 @@
 import struct
 import numpy
 
-from .mesh_exporter import MeshExporter
+
 
 from ..common.migoto_format import *
 
@@ -18,6 +18,7 @@ from ..utils.log_utils import LOG
 from .extracted_object import ExtractedObject, ExtractedObjectHelper
 from ..common.migoto_format import M_DrawIndexed,ObjDataModel
 from ..config.import_config import ImportConfig
+from .obj_buffer_model import ObjBufferModel
 
 from .branch_model import BranchModel
 
@@ -84,7 +85,7 @@ class DrawIBModelWWMI:
         # 也就是说之前的方法基本上都得重写，因为之前是基于当前选中的obj来进行格式转换的。
         # 其次就是可能要考虑到先声明数据类型，后进行执行的问题，比如WWMI就是把所有的数据类型提前全部声明好
         # 最后需要的时候只执行一次就把所有的内容都拿到了，本质上是数据类型设计的比较好。
-
+        
 
 
         # (4) 根据之前解析集合架构的结果，读取obj对象内容到字典中
@@ -117,15 +118,14 @@ class DrawIBModelWWMI:
         # (8) 选中当前融合的obj对象，计算得到ib和category_buffer，以及每个IndexId对应的VertexId
         merged_obj = self.merged_object.object
 
-        # 调用get_buffer_ib_vb_fast前必须选中obj
-        bpy.context.view_layer.objects.active = merged_obj
+        merged_obj.name
         
-        # 计算得到MergedObj的IndexBuffer和CategoryBuffer
-        ib, category_buffer_dict,index_vertex_id_dict = MeshExporter.get_buffer_ib_vb_fast(self.d3d11GameType)
+        obj_buffer_model = ObjBufferModel(d3d11_game_type=self.d3d11GameType,obj_name=merged_obj.name)
+
         # 写出到文件
-        self.write_out_index_buffer(ib=ib)
-        self.write_out_category_buffer(category_buffer_dict=category_buffer_dict)
-        self.write_out_shapekey_buffer(merged_obj=merged_obj, index_vertex_id_dict=index_vertex_id_dict)
+        self.write_out_index_buffer(ib=obj_buffer_model.ib)
+        self.write_out_category_buffer(category_buffer_dict=obj_buffer_model.category_buffer_dict)
+        self.write_out_shapekey_buffer(merged_obj=merged_obj, index_vertex_id_dict=obj_buffer_model.index_vertex_id_dict)
 
         # TODO 如果Merged架构下，顶点组数量超过了255，则必须使用Remap技术
         # 则必须判断每个Component，但是这里已经获取不到每个Component的数据了。

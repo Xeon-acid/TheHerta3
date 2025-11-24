@@ -109,6 +109,7 @@ class ObjDataModel:
         obj_name_split = self.obj_name.split("-")
         self.draw_ib = obj_name_split[0]
 
+        # TODO 这里以后要改进去掉，统一规范
         # 鸣潮生成的临时obj不会遵循命名规范，这里的值也不需要设置
         # 这里是旧代码的遗留问题，暂时只添加个兼容处理即可。
         if "-" in self.obj_name:

@@ -1,10 +1,17 @@
-"""
-导出Mesh到二进制文件
-"""
-import collections
+'''
+新的设计，把旧的BufferModel和MeshExporter以及ObjDataModel整合到一起了
+因为从结果上来看，BufferModel和MeshExporter只调用了一次，属于严重浪费
+不如直接传入d3d11_game_type和obj_name到ObjBufferModel，然后直接一次性得到所有的内容
 
-import bpy
+ObjBufferModel一创建，就自动把所有的内容都搞定了，后面只需要直接拿去使用就行了
+'''
+
+import collections
 import numpy
+import bpy
+
+from dataclasses import dataclass, field
+from typing import Dict
 
 from ..utils.format_utils import FormatUtils, Fatal
 from ..utils.timer_utils import TimerUtils
@@ -17,25 +24,69 @@ from ..config.properties_generate_mod import Properties_GenerateMod
 
 from .migoto_format import D3D11GameType,ObjDataModel
 
-class BufferModel:
-    '''
-    BufferModel用于抽象每一个obj的mesh对象中的数据，加快导出速度。
-    '''
-    
-    def __init__(self,d3d11GameType:D3D11GameType) -> None:
-        self.d3d11GameType:D3D11GameType = d3d11GameType
+@dataclass
+class ObjBufferModel:
+    # 初始化时必须填的字段
+    d3d11_game_type:D3D11GameType
+    obj_name:str
 
-        self.dtype = None
-        self.element_vertex_ndarray  = None
+    # 其它后来生成的字段
+    dtype:numpy.dtype = field(init=False, repr=False)
+    element_vertex_ndarray:numpy.ndarray = field(init=False,repr=False)
+
+    ib:list = field(init=False,repr=False)
+    category_buffer_dict:dict = field(init=False,repr=False)
+    index_vertex_id_dict:dict = field(init=False,repr=False) # 仅用于WWMI的索引顶点ID字典，key是顶点索引，value是顶点ID，默认可以为None
+
+    def __post_init__(self) -> None:
+        '''
+        使用Numpy直接从指定名称的obj的mesh中转换数据到目标格式Buffer
+
+        TODO 目前这个函数分别在BranchModel和DrawIBModelWWMI中被调用，
+        这是因为我们对indexid_vertexid_dict的组合还没有搞清楚导致的
+        实际上全部都应该在BranchModel中进行调用。
+
+        TODO 且获取indexid_vertexid_dict很明显导致导出速度变慢，算法仍然有问题
+        '''
+        obj = ObjUtils.get_obj_by_name(name=self.obj_name)
+
+        self.check_and_verify_attributes(obj)
+        # print("正在计算物体Buffer数据: " + obj.name)
         
+        # Nico: 通过evaluated_get获取到的是一个新的mesh，用于导出，不影响原始Mesh
+        mesh = ObjUtils.get_mesh_evaluate_from_obj(obj=obj)
+
+        # 三角化mesh
+        ObjUtils.mesh_triangulate(mesh)
+
+        # Calculates tangents and makes loop normals valid (still with our custom normal data from import time):
+        # 前提是有UVMap，前面的步骤应该保证了模型至少有一个TEXCOORD.xy
+        mesh.calc_tangents()
+    
+        # 读取并解析数据
+        self.parse_elementname_ravel_ndarray_dict(mesh)
+
+        # 因为只有存在TANGENT时，顶点数才会增加，所以如果是GF2并且存在TANGENT才使用共享TANGENT防止增加顶点数
+        if GlobalConfig.logic_name == LogicName.UnityCPU and "TANGENT" in self.d3d11_game_type.OrderedFullElementList:
+            self.calc_index_vertex_buffer_girlsfrontline2(obj, mesh)
+        elif GlobalConfig.logic_name == LogicName.WWMI:
+            print("calc_index_vertex_buffer_wwmi::")
+            self.calc_index_vertex_buffer_wwmi(obj, mesh)
+        elif GlobalConfig.logic_name == LogicName.SnowBreak:
+            self.calc_index_vertex_buffer_wwmi(obj, mesh)
+        else:
+            # 计算IndexBuffer和CategoryBufferDict
+            self.calc_index_vertex_buffer_universal(obj, mesh)
+        
+
     def check_and_verify_attributes(self,obj:bpy.types.Object):
         '''
         校验并补全部分元素
         COLOR
         TEXCOORD、TEXCOORD1、TEXCOORD2、TEXCOORD3
         '''
-        for d3d11_element_name in self.d3d11GameType.OrderedFullElementList:
-            d3d11_element = self.d3d11GameType.ElementNameD3D11ElementDict[d3d11_element_name]
+        for d3d11_element_name in self.d3d11_game_type.OrderedFullElementList:
+            d3d11_element = self.d3d11_game_type.ElementNameD3D11ElementDict[d3d11_element_name]
             # 校验并补全所有COLOR的存在
             if d3d11_element_name.startswith("COLOR"):
                 if d3d11_element_name not in obj.data.vertex_colors:
@@ -76,8 +127,8 @@ class BufferModel:
         # 预设的权重个数，也就是每个顶点组受多少个权重影响
         blend_size = 4
 
-        for d3d11_element_name in self.d3d11GameType.OrderedFullElementList:
-            d3d11_element = self.d3d11GameType.ElementNameD3D11ElementDict[d3d11_element_name]
+        for d3d11_element_name in self.d3d11_game_type.OrderedFullElementList:
+            d3d11_element = self.d3d11_game_type.ElementNameD3D11ElementDict[d3d11_element_name]
             np_type = FormatUtils.get_nptype_from_format(d3d11_element.Format)
 
             format_len = int(d3d11_element.ByteWidth / numpy.dtype(np_type).itemsize)
@@ -97,7 +148,7 @@ class BufferModel:
 
 
 
-        normalize_weights = "Blend" in self.d3d11GameType.OrderedCategoryNameList
+        normalize_weights = "Blend" in self.d3d11_game_type.OrderedCategoryNameList
 
         # normalize_weights = False
 
@@ -113,8 +164,8 @@ class BufferModel:
 
 
         # 对每一种Element都获取对应的数据
-        for d3d11_element_name in self.d3d11GameType.OrderedFullElementList:
-            d3d11_element = self.d3d11GameType.ElementNameD3D11ElementDict[d3d11_element_name]
+        for d3d11_element_name in self.d3d11_game_type.OrderedFullElementList:
+            d3d11_element = self.d3d11_game_type.ElementNameD3D11ElementDict[d3d11_element_name]
 
             if d3d11_element_name == 'POSITION':
                 # TimerUtils.Start("Position Get")
@@ -429,7 +480,7 @@ class BufferModel:
                 else:
                     print(blendweights.shape)
                     raise Fatal("未知的BLENDWEIGHTS格式")
-    def calc_index_vertex_buffer_girlsfrontline2(self, obj, mesh: bpy.types.Mesh) -> ObjDataModel:
+    def calc_index_vertex_buffer_girlsfrontline2(self, obj, mesh: bpy.types.Mesh):
         '''
         1. Blender 的“顶点数”= mesh.vertices 长度，只要位置不同就算一个。
         2. 我们预分配同样长度的盒子列表，盒子下标 == 顶点下标，保证一一对应。
@@ -483,8 +534,8 @@ class BufferModel:
         flattened_ib = [i for sub in ib for i in sub]
 
         # 8. 拆 CategoryBuffer
-        category_stride_dict = self.d3d11GameType.get_real_category_stride_dict()
-        category_buffer_dict = {name: [] for name in self.d3d11GameType.CategoryStrideDict}
+        category_stride_dict = self.d3d11_game_type.get_real_category_stride_dict()
+        category_buffer_dict = {name: [] for name in self.d3d11_game_type.CategoryStrideDict}
         data_matrix = numpy.array([numpy.frombuffer(b, dtype=numpy.uint8) for b in indexed_vertices])
         stride_offset = 0
         for name, stride in category_stride_dict.items():
@@ -492,86 +543,13 @@ class BufferModel:
             stride_offset += stride
 
         print("长度：", v_cnt)          # 这里一定是 21668
-        obj_model = ObjDataModel(mesh.name)
-        obj_model.ib = flattened_ib
-        obj_model.category_buffer_dict = category_buffer_dict
-        obj_model.index_vertex_id_dict = None
-        return obj_model
-
-    def calc_index_vertex_buffer_girlsfrontline2_bk(self,obj,mesh:bpy.types.Mesh)->ObjDataModel:
-        '''
-        计算IndexBuffer和CategoryBufferDict并返回
-
-        这里是速度瓶颈，23万顶点情况下测试，前面的获取mesh数据只用了1.5秒
-        但是这里两个步骤加起来用了6秒，占了4/5运行时间。
-        不过暂时也够用了，先不管了。
-        '''
-        # TimerUtils.Start("Calc IB VB")
-        # (1) 统计模型的索引和唯一顶点
-        '''
-        保持相同顶点数时，让相同顶点使用相同的TANGENT值来避免增加索引数和顶点数。
-        这里我们使用每个顶点第一次出现的TANGENT值。
-        效率比下面的低50%，不过能使用这个选项的场景只有导入直接导出原模型，所以总运行时间基本都在0.4秒以内，用户感觉不到差距的，没问题。
-        '''
-        print("calc ivb gf2")
-        # 创建一个空列表用于存储最终的结果
-        ib = []
-        indexed_vertices = collections.OrderedDict()
-        # 一个字典确保每个符合条件的position只出现过一次
-        position_normal_sharedtangent_dict = {}
-        # 遍历每个多边形（polygon）
-        for poly in mesh.polygons:
-            # 创建一个临时列表用于存储当前多边形的索引
-            vertex_indices = []
-            
-            # 遍历当前多边形中的每一个环（loop），根据多边形的起始环和环总数
-            for blender_lvertex in mesh.loops[poly.loop_start:poly.loop_start + poly.loop_total]:
-                vertex_data_get = self.element_vertex_ndarray[blender_lvertex.index].copy()
-
-           
-                poskey = tuple(vertex_data_get['POSITION'] + vertex_data_get['NORMAL'])
+        self.ib = flattened_ib
+        self.category_buffer_dict = category_buffer_dict
+        self.index_vertex_id_dict = None
+ 
 
 
-                if poskey in position_normal_sharedtangent_dict:
-                    tangent_var = position_normal_sharedtangent_dict[poskey]
-                    vertex_data_get['TANGENT'] = tangent_var
-                else:
-                    tangent_var = vertex_data_get['TANGENT']
-                    position_normal_sharedtangent_dict[poskey] = tangent_var
-                
-                vertex_data = vertex_data_get.tobytes()
-                index = indexed_vertices.setdefault(vertex_data, len(indexed_vertices))
-                vertex_indices.append(index)
-            
-            # 将当前多边形的顶点索引列表添加到最终结果列表中
-            ib.append(vertex_indices)
-
-        print("长度：")
-        print(len(position_normal_sharedtangent_dict))
-            
-        flattened_ib = [item for sublist in ib for item in sublist]
-        # TimerUtils.End("Calc IB VB")
-
-        # (2) 转换为CategoryBufferDict
-        # TimerUtils.Start("Calc CategoryBuffer")
-        category_stride_dict = self.d3d11GameType.get_real_category_stride_dict()
-        category_buffer_dict:dict[str,list] = {}
-        for categoryname,category_stride in self.d3d11GameType.CategoryStrideDict.items():
-            category_buffer_dict[categoryname] = []
-
-        data_matrix = numpy.array([numpy.frombuffer(byte_data,dtype=numpy.uint8) for byte_data in indexed_vertices])
-        stride_offset = 0
-        for categoryname,category_stride in category_stride_dict.items():
-            category_buffer_dict[categoryname] = data_matrix[:,stride_offset:stride_offset + category_stride].flatten()
-            stride_offset += category_stride
-
-        obj_model = ObjDataModel(mesh.name)
-        obj_model.ib = flattened_ib
-        obj_model.category_buffer_dict = category_buffer_dict
-        obj_model.index_vertex_id_dict = None
-        return obj_model
-
-    def calc_index_vertex_buffer_wwmi(self,obj,mesh:bpy.types.Mesh)->ObjDataModel:
+    def calc_index_vertex_buffer_wwmi(self,obj,mesh:bpy.types.Mesh):
         '''
         计算IndexBuffer和CategoryBufferDict并返回
 
@@ -612,9 +590,9 @@ class BufferModel:
 
         # (2) 转换为CategoryBufferDict
         # TimerUtils.Start("Calc CategoryBuffer")
-        category_stride_dict = self.d3d11GameType.get_real_category_stride_dict()
+        category_stride_dict = self.d3d11_game_type.get_real_category_stride_dict()
         category_buffer_dict:dict[str,list] = {}
-        for categoryname,category_stride in self.d3d11GameType.CategoryStrideDict.items():
+        for categoryname,category_stride in self.d3d11_game_type.CategoryStrideDict.items():
             category_buffer_dict[categoryname] = []
 
         data_matrix = numpy.array([numpy.frombuffer(byte_data,dtype=numpy.uint8) for byte_data in indexed_vertices])
@@ -623,8 +601,6 @@ class BufferModel:
             category_buffer_dict[categoryname] = data_matrix[:,stride_offset:stride_offset + category_stride].flatten()
             stride_offset += category_stride
 
-        obj_model = ObjDataModel(mesh.name)
-        # obj_model.ib = flattened_ib
 
         print("导出时翻转面朝向")
         flipped_indices = []
@@ -635,13 +611,12 @@ class BufferModel:
             flipped_indices.extend(flipped_triangle)
         # print(flipped_indices[0],flipped_indices[1],flipped_indices[2])
 
-        obj_model.ib = flipped_indices
+        self.ib = flipped_indices
 
-        obj_model.category_buffer_dict = category_buffer_dict
-        obj_model.index_vertex_id_dict = index_vertex_id_dict
-        return obj_model
+        self.category_buffer_dict = category_buffer_dict
+        self.index_vertex_id_dict = index_vertex_id_dict
 
-    def calc_index_vertex_buffer_universal(self,obj,mesh:bpy.types.Mesh)->ObjDataModel:
+    def calc_index_vertex_buffer_universal(self,obj,mesh:bpy.types.Mesh):
         '''
         计算IndexBuffer和CategoryBufferDict并返回
 
@@ -664,19 +639,19 @@ class BufferModel:
         # TimerUtils.End("Calc IB VB")
 
         # 重计算TANGENT步骤
-        indexed_vertices = self.average_normal_tangent(obj=obj, indexed_vertices=indexed_vertices, d3d11GameType=self.d3d11GameType,dtype=self.dtype)
+        indexed_vertices = self.average_normal_tangent(obj=obj, indexed_vertices=indexed_vertices, d3d11GameType=self.d3d11_game_type,dtype=self.dtype)
         
         # 重计算COLOR步骤
-        indexed_vertices = self.average_normal_color(obj=obj, indexed_vertices=indexed_vertices, d3d11GameType=self.d3d11GameType,dtype=self.dtype)
+        indexed_vertices = self.average_normal_color(obj=obj, indexed_vertices=indexed_vertices, d3d11GameType=self.d3d11_game_type,dtype=self.dtype)
 
         # print("indexed_vertices:")
         # print(str(len(indexed_vertices)))
 
         # (2) 转换为CategoryBufferDict
         # TimerUtils.Start("Calc CategoryBuffer")
-        category_stride_dict = self.d3d11GameType.get_real_category_stride_dict()
+        category_stride_dict = self.d3d11_game_type.get_real_category_stride_dict()
         category_buffer_dict:dict[str,list] = {}
-        for categoryname,category_stride in self.d3d11GameType.CategoryStrideDict.items():
+        for categoryname,category_stride in self.d3d11_game_type.CategoryStrideDict.items():
             category_buffer_dict[categoryname] = []
 
         data_matrix = numpy.array([numpy.frombuffer(byte_data,dtype=numpy.uint8) for byte_data in indexed_vertices])
@@ -685,11 +660,10 @@ class BufferModel:
             category_buffer_dict[categoryname] = data_matrix[:,stride_offset:stride_offset + category_stride].flatten()
             stride_offset += category_stride
 
-        obj_model = ObjDataModel(obj.name)
 
         
 
-        obj_model.ib = flattened_ib
+        self.ib = flattened_ib
 
         flip_face_direction = False
 
@@ -711,13 +685,12 @@ class BufferModel:
                 flipped_triangle = triangle[::-1]
                 flipped_indices.extend(flipped_triangle)
             # print(flipped_indices[0],flipped_indices[1],flipped_indices[2])
-            obj_model.ib = flipped_indices
+            self.ib = flipped_indices
 
 
 
-        obj_model.category_buffer_dict = category_buffer_dict
-        obj_model.index_vertex_id_dict = None
-        return obj_model
+        self.category_buffer_dict = category_buffer_dict
+        self.index_vertex_id_dict = None
 
 
     def average_normal_tangent(self,obj,indexed_vertices,d3d11GameType,dtype):
@@ -857,62 +830,4 @@ class BufferModel:
         TimerUtils.End("Recalculate COLOR")
         return vb
 
-
-
-class MeshExporter:
-
-    @classmethod
-    def get_buffer_ib_vb_fast(cls,d3d11GameType:D3D11GameType):
-        '''
-        使用Numpy直接从当前选中的obj的mesh中转换数据到目标格式Buffer
-
-
-        TODO 目前这个函数分别在BranchModel和DrawIBModelWWMI中被调用，
-        这是因为我们对indexid_vertexid_dict的组合还没有搞清楚导致的
-        实际上全部都应该在BranchModel中进行调用。
-
-        TODO 且获取indexid_vertexid_dict很明显导致导出速度变慢，算法仍然有问题
-        '''
-        # TimerUtils.Start("get_buffer_ib_vb_fast")
-        buffer_model = BufferModel(d3d11GameType=d3d11GameType)
-
-        obj = ObjUtils.get_bpy_context_object()
-        buffer_model.check_and_verify_attributes(obj)
-        # print("正在计算物体Buffer数据: " + obj.name)
         
-        # Nico: 通过evaluated_get获取到的是一个新的mesh，用于导出，不影响原始Mesh
-        mesh = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh()
-
-        # 三角化mesh
-        ObjUtils.mesh_triangulate(mesh)
-
-        # Calculates tangents and makes loop normals valid (still with our custom normal data from import time):
-        # 前提是有UVMap，前面的步骤应该保证了模型至少有一个TEXCOORD.xy
-        mesh.calc_tangents()
-    
-        # 读取并解析数据
-        buffer_model.parse_elementname_ravel_ndarray_dict(mesh)
-
-        obj_model = ObjDataModel(obj.name)
-
-        # 因为只有存在TANGENT时，顶点数才会增加，所以如果是GF2并且存在TANGENT才使用共享TANGENT防止增加顶点数
-        if GlobalConfig.logic_name == LogicName.UnityCPU and "TANGENT" in buffer_model.d3d11GameType.OrderedFullElementList:
-            obj_model = buffer_model.calc_index_vertex_buffer_girlsfrontline2(obj, mesh)
-        elif GlobalConfig.logic_name == LogicName.WWMI:
-            print("calc_index_vertex_buffer_wwmi::")
-            
-            obj_model = buffer_model.calc_index_vertex_buffer_wwmi(obj, mesh)
-
-        elif GlobalConfig.logic_name == LogicName.SnowBreak:
-            obj_model = buffer_model.calc_index_vertex_buffer_wwmi(obj, mesh)
-        else:
-            # 计算IndexBuffer和CategoryBufferDict
-            obj_model = buffer_model.calc_index_vertex_buffer_universal(obj, mesh)
-            
-        # TimerUtils.End("get_buffer_ib_vb_fast")
-        
-        return obj_model.ib, obj_model.category_buffer_dict, obj_model.index_vertex_id_dict
-
-
-
-

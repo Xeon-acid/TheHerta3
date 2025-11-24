@@ -9,7 +9,8 @@ from ..utils.config_utils import ConfigUtils
 from ..common.migoto_format import M_Key, ObjDataModel, M_Condition, D3D11GameType
 from ..utils.tips_utils import TipUtils
 
-from .mesh_exporter import MeshExporter
+
+from .obj_buffer_model import ObjBufferModel
 
 
 
@@ -262,9 +263,6 @@ class BranchModel:
                 __obj_name_ib_dict[obj.name] = obj_model.ib
                 __obj_name_category_buffer_list_dict[obj.name] = obj_model.category_buffer_dict
             else:
-                # 选中当前obj对象
-                bpy.context.view_layer.objects.active = obj
-
                 # XXX 我们在导出具体数据之前，先对模型整体的权重进行normalize_all预处理，才能让后续的具体每一个权重的normalize_all更好的工作
                 # 使用这个的前提是当前obj中没有锁定的顶点组，所以这里要先进行判断。
 
@@ -275,18 +273,15 @@ class BranchModel:
                         ObjUtils.normalize_all(obj)
 
                 # print("DrawIB BranchModel")
-                ib, category_buffer_dict, index_vertex_id_dict = MeshExporter.get_buffer_ib_vb_fast(d3d11_game_type)
+                obj_buffer_model = ObjBufferModel(d3d11_game_type=d3d11_game_type,obj_name=obj_name)
 
                 # print(len(category_buffer_dict["Blend"]))
                 # print(len(index_vertex_id_dict))
                 
-                __obj_name_ib_dict[obj.name] = ib
-                __obj_name_category_buffer_list_dict[obj.name] = category_buffer_dict
+                __obj_name_ib_dict[obj.name] = obj_buffer_model.ib
+                __obj_name_category_buffer_list_dict[obj.name] = obj_buffer_model.category_buffer_dict
 
-                obj_model = ObjDataModel(obj_name=obj.name)
-                obj_model.ib = ib
-                obj_model.category_buffer_dict = category_buffer_dict
-                obj_name_obj_model_cache_dict[obj_name] = obj_model
+                obj_name_obj_model_cache_dict[obj_name] = obj_buffer_model
         
         final_ordered_draw_obj_model_list:list[ObjDataModel] = [] 
 

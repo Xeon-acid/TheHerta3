@@ -420,6 +420,15 @@ class OpenObject:
 
 class ObjUtils:
 
+    @staticmethod
+    def get_obj_by_name(name: str) -> bpy.types.Object | None:
+        """根据名称拿到 Object；找不到返回 None"""
+        return bpy.data.objects.get(name)          # 等价于 bpy.data.objects[name]，但不会抛 KeyError
+    
+    @staticmethod
+    def get_mesh_evaluate_from_obj(obj:bpy.types.Object) -> bpy.types.Mesh:
+        return obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh()
+
     @classmethod
     def split_obj_by_loose_parts_to_collection(cls,obj,collection_name:str):
         
@@ -513,7 +522,7 @@ class ObjUtils:
             print("没有找到合适的网格对象来执行规范化操作。")
 
     @classmethod
-    def mesh_triangulate(cls,me):
+    def mesh_triangulate(cls,me:bpy.types.Mesh):
         '''
         三角化一个mesh
         注意这个三角化之后就变成新的mesh了
