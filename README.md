@@ -18,3 +18,13 @@
 
 请使用以下VSCode插件:
 - Blender Development (作者是 Jacques Lucke)
+
+# AI辅助开发
+
+如果看不懂代码或者不知道怎么写代码
+
+请在VSCode中选择侧边栏的Agent Sessions，选择LOCAL CHAT AGENT,
+
+随后可以在右侧对话框中让AI理解代码并讲解原理，或者直接让它帮你实现功能，当前时间2025/11/24推荐使用GPT5 mini，效果是最好的。
+
+但是注意，使用AI生成的代码务必经过完全测试再提交，因为AI可能会产生幻觉输出。
