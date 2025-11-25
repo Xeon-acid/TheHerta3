@@ -26,15 +26,33 @@ from ..base.d3d11_gametype import D3D11GameType
 from ..base.obj_data_model import ObjDataModel
 
 @dataclass
-class ObjBufferModel:
+class ObjElementModel:
+    '''
+    TODO 需要大规模改造
+
+    这个类只负责把Blender的数据转换为element_ndarray的dict
+    然后后面可以根据element来获取其数据就足够了
+    不应该存在转为CateogryBuffer的步骤
+    
+    '''
     # 初始化时必须填的字段
     d3d11_game_type:D3D11GameType
     obj_name:str
 
     # 其它后来生成的字段
     dtype:numpy.dtype = field(init=False, repr=False)
-    element_vertex_ndarray:numpy.ndarray = field(init=False,repr=False)
 
+    # 到这里的时候还没有变为Buffer，还是ndarray的格式。
+    # 然后WWMI可能需要对这里的数据直接处理。
+    # 然后所有的转为Buffer的行为，应该是再最后执行的，而不是创建这个类的时候就执行。
+    # TODO 所以这里要把转为Buffer的行为拆分出去，拆分到另一个类中专门调用
+    # 逻辑上必须拆分开来，否则后面很多功能都无法轻易实现。
+
+    element_vertex_ndarray:numpy.ndarray = field(init=False,repr=False)
+    
+
+    # TODO 只有在最终写出的时候，才需要用到ib,category_buffer_dict,index_vertex_id_dict
+    # 平时根本用不到，那还留着它干啥呢？
     ib:list = field(init=False,repr=False)
     category_buffer_dict:dict = field(init=False,repr=False)
     index_vertex_id_dict:dict = field(init=False,repr=False) # 仅用于WWMI的索引顶点ID字典，key是顶点索引，value是顶点ID，默认可以为None
