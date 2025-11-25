@@ -32,308 +32,6 @@ BLOCK_SIZE = 512       # forward/reverse block 大小（WWMI 默认为 512）
 REMAPP_SKIP_THRESHOLD = 256  # 超过多少个 VG 才启用 Remap（WWMI 默认为 256）
 
 
-def _detect_vg_slots_from_gametype(d3d11_game_type, default=DEFAULT_VG_SLOTS):
-    """
-    Try to detect number of blend index slots from a D3D11GameType instance.
-    Falls back to `default` when detection fails.
-    """
-    try:
-        for elem in getattr(d3d11_game_type, 'D3D11ElementList', []):
-            name = (getattr(elem, 'SemanticName', '') or '').lower()
-            if 'blend' in name and ('index' in name or 'indices' in name):
-                byte_width = int(getattr(elem, 'ByteWidth', 0) or 0)
-                fmt = (getattr(elem, 'Format', '') or '').upper()
-                if 'R8' in fmt:
-                    comp_bytes = 1
-                elif 'R16' in fmt:
-                    comp_bytes = 2
-                elif 'R32' in fmt:
-                    comp_bytes = 4
-                else:
-                    comp_bytes = 1
-                if comp_bytes > 0 and byte_width > 0:
-                    slots = max(1, byte_width // comp_bytes)
-                    return int(slots)
-    except Exception:
-        pass
-    return int(default)
-
-
-def collect_component_mesh_data(obj, vg_slots=None):
-    """
-    输入：一个 component 的已合并对象（component_obj），返回：
-    - vertex_count
-    - index_data (list of vertex indices, flattened triangles)
-    - vg_ids (list of lists) 每顶点 vg_slots 个 uint (原始 group indices)
-    - vg_weights (list of lists) 每顶点对应权重 0..255
-    """
-    if vg_slots is None:
-        vg_slots = DEFAULT_VG_SLOTS
-
-    mesh = ObjUtils.get_mesh_evaluate_from_obj(obj)
-    mesh.calc_loop_triangles()
-
-    # index_data: flatten all triangles' vertex indices
-    index_list = []
-    for tri in mesh.loop_triangles:
-        index_list.extend(list(tri.vertices))
-    index_data = index_list
-    vertex_count = len(mesh.vertices)
-
-    # Build per-vertex vg id and weights, fixed vg_slots
-    vg_ids = [[0]*vg_slots for _ in range(vertex_count)]
-    vg_weights = [[0]*vg_slots for _ in range(vertex_count)]
-
-    for vi, v in enumerate(mesh.vertices):
-        slot = 0
-        # v.groups: Blender's collection of vertex group weights for this vertex
-        for g in v.groups:
-            if slot >= vg_slots:
-                break
-            # g.group is the group index (int), g.weight is 0..1
-            vg_ids[vi][slot] = int(g.group)
-            vg_weights[vi][slot] = int(round(max(0.0, min(1.0, g.weight)) * 255))
-            slot += 1
-
-    return vertex_count, index_data, vg_ids, vg_weights
-
-
-
-def export_blendremap_for_components_v2_wwmi(components_objs, out_dir, vg_slots=None, d3d11_game_type=None):
-    """
-    WWMI-exact v2 implementation.
-    Builds BlendRemapVertexVG.buf using loop/element-based unique-first-occurrence rows
-    (matching WWMI-Tools), pads/truncates to `vg_slots`, writes uint16 rows, and
-    constructs BlendRemapForward/Reverse/Layout buffers.
-    This function is added as a new v2 variant and does not modify existing v2/v3.
-    """
-    os.makedirs(out_dir, exist_ok=True)
-
-    if vg_slots is None:
-        vg_slots = _detect_vg_slots_from_gametype(d3d11_game_type or D3D11GameType(), default=DEFAULT_VG_SLOTS)
-
-    concatenated_vg_ids = []
-    concatenated_vg_weights = []
-    concatenated_index_data = []
-    index_layout = []
-
-    vertex_offset = 0
-
-    def _normalize_rows(indices_arr, weights_arr, slots):
-        arr = numpy.asarray(indices_arr)
-        if arr.ndim == 1:
-            arr = arr.reshape(-1, 1)
-        M = arr.shape[1]
-        if M >= slots:
-            vg_rows = arr[:, :slots]
-        else:
-            pad = numpy.zeros((arr.shape[0], slots - M), dtype=numpy.uint32)
-            vg_rows = numpy.concatenate((arr, pad), axis=1)
-
-        if weights_arr is None:
-            weights = numpy.zeros((vg_rows.shape[0], slots), dtype=numpy.uint8)
-        else:
-            w = numpy.asarray(weights_arr)
-            if w.ndim == 1:
-                w = w.reshape(-1, 1)
-            if w.dtype != numpy.uint8:
-                w = (w * 255.0).round().astype(numpy.uint8)
-            if w.shape[1] >= slots:
-                weights = w[:, :slots]
-            else:
-                wp = numpy.zeros((vg_rows.shape[0], slots), dtype=numpy.uint8)
-                wp[:, :w.shape[1]] = w
-                weights = wp
-
-        return vg_rows.astype(numpy.uint32), weights.astype(numpy.uint8)
-
-    for comp_obj in components_objs:
-        # Try to use ObjBufferModel loop/element rows; fallback to mesh-based
-        try:
-            obj_buf = ObjBufferModel(d3d11_game_type=(d3d11_game_type or D3D11GameType()), obj_name=comp_obj.name)
-        except Exception:
-            vertex_count, index_data, vg_ids, vg_weights = collect_component_mesh_data(comp_obj, vg_slots=vg_slots)
-            concatenated_vg_ids.extend(vg_ids)
-            concatenated_vg_weights.extend(vg_weights)
-            if index_data:
-                adjusted = [int(i) + vertex_offset for i in index_data]
-                concatenated_index_data.extend(adjusted)
-                index_layout.append(len(index_data))
-            else:
-                index_layout.append(0)
-            vertex_offset += vertex_count
-            continue
-
-        # extract contiguous element rows and dedupe by full-row bytes preserving first occurrence
-        try:
-            vb = numpy.ascontiguousarray(obj_buf.element_vertex_ndarray)
-            n_rows = len(vb)
-            row_size = vb.dtype.itemsize
-            try:
-                row_bytes = vb.view(numpy.uint8).reshape(n_rows, row_size)
-            except Exception:
-                raw = vb.tobytes()
-                row_bytes = numpy.frombuffer(raw, dtype=numpy.uint8).reshape(n_rows, row_size)
-
-            _, unique_first_indices = numpy.unique(row_bytes, axis=0, return_index=True)
-            unique_first_indices = numpy.sort(unique_first_indices)
-            print(f'[v2_wwmi-debug] component={comp_obj.name} element_rows={n_rows} unique_first_indices={len(unique_first_indices)}')
-        except Exception:
-            unique_first_indices = None
-
-        try:
-            all_blendindices = numpy.asarray(obj_buf.element_vertex_ndarray.get('BLENDINDICES'))
-        except Exception:
-            all_blendindices = None
-        try:
-            all_blendweights = numpy.asarray(obj_buf.element_vertex_ndarray.get('BLENDWEIGHT', None))
-        except Exception:
-            all_blendweights = None
-
-        if all_blendindices is None or unique_first_indices is None:
-            print(f'[v2_wwmi-debug] component={comp_obj.name} falling back to mesh-based collection')
-            vertex_count, index_data, vg_ids, vg_weights = collect_component_mesh_data(comp_obj, vg_slots=vg_slots)
-            concatenated_vg_ids.extend(vg_ids)
-            concatenated_vg_weights.extend(vg_weights)
-            if index_data:
-                adjusted = [int(i) + vertex_offset for i in index_data]
-                concatenated_index_data.extend(adjusted)
-                index_layout.append(len(index_data))
-            else:
-                index_layout.append(0)
-            vertex_offset += vertex_count
-            continue
-
-        unique_blendindices = all_blendindices[unique_first_indices]
-        unique_blendweights = None if all_blendweights is None else all_blendweights[unique_first_indices]
-        print(f'[v2_wwmi-debug] component={comp_obj.name} unique_blendindices_rows={len(unique_blendindices)}')
-
-        vg_rows, vw = _normalize_rows(unique_blendindices, unique_blendweights, vg_slots)
-        print(f'[v2_wwmi-debug] component={comp_obj.name} vg_rows={vg_rows.shape[0]} slots={vg_rows.shape[1]}')
-        concatenated_vg_ids.extend(vg_rows.tolist())
-        concatenated_vg_weights.extend(vw.tolist())
-
-        comp_ib = list(obj_buf.ib) if hasattr(obj_buf, 'ib') else []
-        if comp_ib:
-            adjusted = [int(i) + vertex_offset for i in comp_ib]
-            concatenated_index_data.extend(adjusted)
-            index_layout.append(len(comp_ib))
-        else:
-            index_layout.append(0)
-
-        vertex_offset += vg_rows.shape[0]
-
-    # ensure we have vertices
-    if len(concatenated_vg_ids) == 0:
-        print('No vertices found when exporting BlendRemap (v2_wwmi).')
-        return {'vertex_vg_count': 0, 'blocks_count': 0, 'counts': []}
-
-    # build numpy arrays
-    vg_ids_np = numpy.array(concatenated_vg_ids, dtype=numpy.uint16)
-    try:
-        vg_ids_np = vg_ids_np.reshape((-1, vg_slots))
-    except Exception:
-        vg_ids_np = numpy.array([(list(r) + [0]*vg_slots)[:vg_slots] for r in concatenated_vg_ids], dtype=numpy.uint16)
-
-    vg_weights_np = numpy.array(concatenated_vg_weights, dtype=numpy.uint8)
-    try:
-        vg_weights_np = vg_weights_np.reshape((-1, vg_slots))
-    except Exception:
-        vg_weights_np = numpy.array([(list(r) + [0]*vg_slots)[:vg_slots] for r in concatenated_vg_weights], dtype=numpy.uint8)
-
-    index_data_np = numpy.array(concatenated_index_data, dtype=numpy.uint32)
-
-    # write BlendRemapVertexVG.buf (uint16 per slot, little-endian)
-    vg_out = vg_ids_np.astype(numpy.uint16)
-    with open(os.path.join(out_dir, 'BlendRemapVertexVG.buf'), 'wb') as f:
-        vg_out.tofile(f)
-    vertex_vg_count = int(vg_out.shape[0])
-    print(f'Wrote BlendRemapVertexVG.buf ({vertex_vg_count} vertices, {vg_out.shape[1]} slots each)')
-    # debug summary
-    try:
-        print(f'[v2_wwmi-debug] total_concatenated_rows={len(concatenated_vg_ids)} vertex_vg_count={vertex_vg_count} index_layout={index_layout}')
-    except Exception:
-        pass
-
-    # construct remap forward/reverse/layout following WWMI policy
-    blend_remap_forward = numpy.empty(0, dtype=numpy.uint16)
-    blend_remap_reverse = numpy.empty(0, dtype=numpy.uint16)
-    remapped_vgs_counts = []
-
-    idx_offset = 0
-    for index_count in index_layout:
-        if index_count <= 0:
-            remapped_vgs_counts.append(0)
-            continue
-
-        vertex_ids = index_data_np[idx_offset: idx_offset + index_count]
-        vertex_ids = numpy.unique(vertex_ids)
-
-        if vertex_ids.size == 0:
-            remapped_vgs_counts.append(0)
-            idx_offset += index_count
-            continue
-
-        obj_vg_ids = vg_ids_np[vertex_ids].flatten()
-
-        if obj_vg_ids.size == 0 or numpy.max(obj_vg_ids) < REMAPP_SKIP_THRESHOLD:
-            remapped_vgs_counts.append(0)
-            idx_offset += index_count
-            continue
-
-        obj_vg_weights = vg_weights_np[vertex_ids].flatten()
-        non_zero_idx = numpy.nonzero(obj_vg_weights > 0)[0]
-
-        if non_zero_idx.size == 0:
-            remapped_vgs_counts.append(0)
-            idx_offset += index_count
-            continue
-
-        obj_vg_ids = obj_vg_ids[non_zero_idx]
-        obj_vg_ids = numpy.unique(obj_vg_ids)
-
-        if obj_vg_ids.size == 0 or numpy.max(obj_vg_ids) < REMAPP_SKIP_THRESHOLD:
-            remapped_vgs_counts.append(0)
-            idx_offset += index_count
-            continue
-
-        if numpy.max(obj_vg_ids) >= BLOCK_SIZE:
-            print(f'WARNING: component has VG id >= {BLOCK_SIZE}, skipping remap for that component.')
-            remapped_vgs_counts.append(0)
-            idx_offset += index_count
-            continue
-
-        remapped_vgs_counts.append(int(obj_vg_ids.size))
-
-        forward = numpy.zeros(BLOCK_SIZE, dtype=numpy.uint16)
-        forward[numpy.arange(obj_vg_ids.size, dtype=numpy.int32)] = obj_vg_ids.astype(numpy.uint16)
-
-        reverse = numpy.zeros(BLOCK_SIZE, dtype=numpy.uint16)
-        reverse[obj_vg_ids.astype(numpy.int32)] = numpy.arange(obj_vg_ids.size, dtype=numpy.uint16)
-
-        blend_remap_forward = numpy.concatenate((blend_remap_forward, forward), axis=0)
-        blend_remap_reverse = numpy.concatenate((blend_remap_reverse, reverse), axis=0)
-
-        idx_offset += index_count
-
-    # write remap files if any
-    if blend_remap_forward.size > 0:
-        with open(os.path.join(out_dir, 'BlendRemapForward.buf'), 'wb') as f:
-            blend_remap_forward.tofile(f)
-        with open(os.path.join(out_dir, 'BlendRemapReverse.buf'), 'wb') as f:
-            blend_remap_reverse.tofile(f)
-        with open(os.path.join(out_dir, 'BlendRemapLayout.buf'), 'wb') as f:
-            numpy.array(remapped_vgs_counts, dtype=numpy.uint32).tofile(f)
-        print(f'Wrote BlendRemapForward.buf and BlendRemapReverse.buf with {int(len(blend_remap_forward)/BLOCK_SIZE)} blocks')
-    else:
-        print('No remap blocks required (all components have VG ids < 256).')
-
-    return {
-        'vertex_vg_count': vertex_vg_count,
-        'blocks_count': int(len(blend_remap_forward)/BLOCK_SIZE),
-        'counts': remapped_vgs_counts
-    }
-
 class DrawIBModelWWMI:
     '''
     这个代表了一个DrawIB的Mod导出模型
@@ -343,6 +41,308 @@ class DrawIBModelWWMI:
     '''
 
     # 通过default_factory让每个类的实例的变量分割开来，不再共享类的静态变量
+    def _detect_vg_slots_from_gametype(self, d3d11_game_type, default=DEFAULT_VG_SLOTS):
+        """
+        尝试从 D3D11GameType 实例中检测 blend index 的槽数。
+        如果检测失败则回退到 `default`。
+        """
+        try:
+            for elem in getattr(d3d11_game_type, 'D3D11ElementList', []):
+                name = (getattr(elem, 'SemanticName', '') or '').lower()
+                if 'blend' in name and ('index' in name or 'indices' in name):
+                    byte_width = int(getattr(elem, 'ByteWidth', 0) or 0)
+                    fmt = (getattr(elem, 'Format', '') or '').upper()
+                    if 'R8' in fmt:
+                        comp_bytes = 1
+                    elif 'R16' in fmt:
+                        comp_bytes = 2
+                    elif 'R32' in fmt:
+                        comp_bytes = 4
+                    else:
+                        comp_bytes = 1
+                    if comp_bytes > 0 and byte_width > 0:
+                        slots = max(1, byte_width // comp_bytes)
+                        return int(slots)
+        except Exception:
+            pass
+        return int(default)
+
+    def collect_component_mesh_data(self, obj, vg_slots=None):
+        """
+        输入：一个 component 的已合并对象（component_obj），返回：
+        - vertex_count
+        - index_data (list of vertex indices, flattened triangles)
+        - vg_ids (list of lists) 每顶点 vg_slots 个 uint (原始 group indices)
+        - vg_weights (list of lists) 每顶点对应权重 0..255
+        """
+        if vg_slots is None:
+            vg_slots = DEFAULT_VG_SLOTS
+
+        mesh = ObjUtils.get_mesh_evaluate_from_obj(obj)
+        mesh.calc_loop_triangles()
+
+        # index_data: 将所有三角形的顶点索引展平成一维列表
+        index_list = []
+        for tri in mesh.loop_triangles:
+            index_list.extend(list(tri.vertices))
+        index_data = index_list
+        vertex_count = len(mesh.vertices)
+
+        # 为每个顶点构建固定长度 vg_slots 的 vg id 和权重表
+        vg_ids = [[0]*vg_slots for _ in range(vertex_count)]
+        vg_weights = [[0]*vg_slots for _ in range(vertex_count)]
+
+        for vi, v in enumerate(mesh.vertices):
+            slot = 0
+            # v.groups: Blender's collection of vertex group weights for this vertex
+            for g in v.groups:
+                if slot >= vg_slots:
+                    break
+                # g.group is the group index (int), g.weight is 0..1
+                vg_ids[vi][slot] = int(g.group)
+                vg_weights[vi][slot] = int(round(max(0.0, min(1.0, g.weight)) * 255))
+                slot += 1
+
+        return vertex_count, index_data, vg_ids, vg_weights
+
+    def export_blendremap_for_components_v2_wwmi(self, components_objs, out_dir, vg_slots=None, d3d11_game_type=None):
+        """
+        WWMI 精准复现的 v2 实现（作为类的实例方法）。
+        将原有顶层函数移动到类中，保持实现不变，但内部回退调用使用类方法。
+        """
+        os.makedirs(out_dir, exist_ok=True)
+
+        if vg_slots is None:
+            vg_slots = self._detect_vg_slots_from_gametype(d3d11_game_type or D3D11GameType(), default=DEFAULT_VG_SLOTS)
+
+        concatenated_vg_ids = []
+        concatenated_vg_weights = []
+        concatenated_index_data = []
+        index_layout = []
+
+        vertex_offset = 0
+
+        def _normalize_rows(indices_arr, weights_arr, slots):
+            arr = numpy.asarray(indices_arr)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            M = arr.shape[1]
+            if M >= slots:
+                vg_rows = arr[:, :slots]
+            else:
+                pad = numpy.zeros((arr.shape[0], slots - M), dtype=numpy.uint32)
+                vg_rows = numpy.concatenate((arr, pad), axis=1)
+
+            if weights_arr is None:
+                weights = numpy.zeros((vg_rows.shape[0], slots), dtype=numpy.uint8)
+            else:
+                w = numpy.asarray(weights_arr)
+                if w.ndim == 1:
+                    w = w.reshape(-1, 1)
+                if w.dtype != numpy.uint8:
+                    w = (w * 255.0).round().astype(numpy.uint8)
+                if w.shape[1] >= slots:
+                    weights = w[:, :slots]
+                else:
+                    wp = numpy.zeros((vg_rows.shape[0], slots), dtype=numpy.uint8)
+                    wp[:, :w.shape[1]] = w
+                    weights = wp
+
+            return vg_rows.astype(numpy.uint32), weights.astype(numpy.uint8)
+
+        for comp_obj in components_objs:
+            # 尝试使用 ObjBufferModel 的 loop/element 行，如果失败则回退到基于网格的收集
+            try:
+                obj_buf = ObjBufferModel(d3d11_game_type=(d3d11_game_type or D3D11GameType()), obj_name=comp_obj.name)
+            except Exception:
+                vertex_count, index_data, vg_ids, vg_weights = self.collect_component_mesh_data(comp_obj, vg_slots=vg_slots)
+                concatenated_vg_ids.extend(vg_ids)
+                concatenated_vg_weights.extend(vg_weights)
+                if index_data:
+                    adjusted = [int(i) + vertex_offset for i in index_data]
+                    concatenated_index_data.extend(adjusted)
+                    index_layout.append(len(index_data))
+                else:
+                    index_layout.append(0)
+                vertex_offset += vertex_count
+                continue
+
+            # 尝试从 ObjBufferModel 中提取连续的 element 行，并按整行字节去重（保留首次出现）
+            try:
+                vb = numpy.ascontiguousarray(obj_buf.element_vertex_ndarray)
+                n_rows = len(vb)
+                row_size = vb.dtype.itemsize
+                try:
+                    row_bytes = vb.view(numpy.uint8).reshape(n_rows, row_size)
+                except Exception:
+                    raw = vb.tobytes()
+                    row_bytes = numpy.frombuffer(raw, dtype=numpy.uint8).reshape(n_rows, row_size)
+                # `numpy.unique` 返回的 index 是首次出现的位置，通过排序恢复行的原始顺序
+                _, unique_first_indices = numpy.unique(row_bytes, axis=0, return_index=True)
+                unique_first_indices = numpy.sort(unique_first_indices)
+                print(f'[v2_wwmi-debug] component={comp_obj.name} element_rows={n_rows} unique_first_indices={len(unique_first_indices)}')
+            except Exception:
+                unique_first_indices = None
+
+            try:
+                all_blendindices = numpy.asarray(obj_buf.element_vertex_ndarray.get('BLENDINDICES'))
+            except Exception:
+                all_blendindices = None
+            try:
+                all_blendweights = numpy.asarray(obj_buf.element_vertex_ndarray.get('BLENDWEIGHT', None))
+            except Exception:
+                all_blendweights = None
+
+            # 如果无法取得 BLENDINDICES 或无法去重元素行，则回退到基于网格的采集方案
+            if all_blendindices is None or unique_first_indices is None:
+                print(f'[v2_wwmi-debug] component={comp_obj.name} falling back to mesh-based collection')
+                vertex_count, index_data, vg_ids, vg_weights = self.collect_component_mesh_data(comp_obj, vg_slots=vg_slots)
+                concatenated_vg_ids.extend(vg_ids)
+                concatenated_vg_weights.extend(vg_weights)
+                if index_data:
+                    adjusted = [int(i) + vertex_offset for i in index_data]
+                    concatenated_index_data.extend(adjusted)
+                    index_layout.append(len(index_data))
+                else:
+                    index_layout.append(0)
+                vertex_offset += vertex_count
+                continue
+
+            unique_blendindices = all_blendindices[unique_first_indices]
+            unique_blendweights = None if all_blendweights is None else all_blendweights[unique_first_indices]
+            print(f'[v2_wwmi-debug] component={comp_obj.name} unique_blendindices_rows={len(unique_blendindices)}')
+
+            # 归一化每行（填充/截断到固定的 vg_slots）并生成权重矩阵
+            vg_rows, vw = _normalize_rows(unique_blendindices, unique_blendweights, vg_slots)
+            print(f'[v2_wwmi-debug] component={comp_obj.name} vg_rows={vg_rows.shape[0]} slots={vg_rows.shape[1]}')
+            concatenated_vg_ids.extend(vg_rows.tolist())
+            concatenated_vg_weights.extend(vw.tolist())
+
+            comp_ib = list(obj_buf.ib) if hasattr(obj_buf, 'ib') else []
+            if comp_ib:
+                adjusted = [int(i) + vertex_offset for i in comp_ib]
+                concatenated_index_data.extend(adjusted)
+                index_layout.append(len(comp_ib))
+            else:
+                index_layout.append(0)
+
+            vertex_offset += vg_rows.shape[0]
+
+        # 确认是否导出了顶点行
+        if len(concatenated_vg_ids) == 0:
+            print('No vertices found when exporting BlendRemap (v2_wwmi).')
+            return {'vertex_vg_count': 0, 'blocks_count': 0, 'counts': []}
+
+        # build numpy arrays
+        vg_ids_np = numpy.array(concatenated_vg_ids, dtype=numpy.uint16)
+        try:
+            vg_ids_np = vg_ids_np.reshape((-1, vg_slots))
+        except Exception:
+            vg_ids_np = numpy.array([(list(r) + [0]*vg_slots)[:vg_slots] for r in concatenated_vg_ids], dtype=numpy.uint16)
+
+        vg_weights_np = numpy.array(concatenated_vg_weights, dtype=numpy.uint8)
+        try:
+            vg_weights_np = vg_weights_np.reshape((-1, vg_slots))
+        except Exception:
+            vg_weights_np = numpy.array([(list(r) + [0]*vg_slots)[:vg_slots] for r in concatenated_vg_weights], dtype=numpy.uint8)
+
+        index_data_np = numpy.array(concatenated_index_data, dtype=numpy.uint32)
+
+        # 准备 BlendRemapVertexVG 数据（仅构建内存数据，延迟写文件）
+        vg_out = vg_ids_np.astype(numpy.uint16)
+        vertex_vg_count = int(vg_out.shape[0])
+        # debug summary（实际写文件将在确认有 remap block 时执行）
+        try:
+            print(f'[v2_wwmi-debug] total_concatenated_rows={len(concatenated_vg_ids)} vertex_vg_count={vertex_vg_count} index_layout={index_layout}')
+        except Exception:
+            pass
+
+        # 构建 remap 的 forward/reverse/layout，遵循 WWMI 的策略
+        blend_remap_forward = numpy.empty(0, dtype=numpy.uint16)
+        blend_remap_reverse = numpy.empty(0, dtype=numpy.uint16)
+        remapped_vgs_counts = []
+
+        idx_offset = 0
+        for index_count in index_layout:
+            if index_count <= 0:
+                remapped_vgs_counts.append(0)
+                continue
+
+            vertex_ids = index_data_np[idx_offset: idx_offset + index_count]
+            vertex_ids = numpy.unique(vertex_ids)
+
+            if vertex_ids.size == 0:
+                remapped_vgs_counts.append(0)
+                idx_offset += index_count
+                continue
+
+            obj_vg_ids = vg_ids_np[vertex_ids].flatten()
+
+            # 如果没有足够大的 vg id，则跳过 remap（避免无意义的 remap）
+            if obj_vg_ids.size == 0 or numpy.max(obj_vg_ids) < REMAPP_SKIP_THRESHOLD:
+                remapped_vgs_counts.append(0)
+                idx_offset += index_count
+                continue
+
+            obj_vg_weights = vg_weights_np[vertex_ids].flatten()
+            non_zero_idx = numpy.nonzero(obj_vg_weights > 0)[0]
+
+            if non_zero_idx.size == 0:
+                remapped_vgs_counts.append(0)
+                idx_offset += index_count
+                continue
+
+            obj_vg_ids = obj_vg_ids[non_zero_idx]
+            obj_vg_ids = numpy.unique(obj_vg_ids)
+
+            if obj_vg_ids.size == 0 or numpy.max(obj_vg_ids) < REMAPP_SKIP_THRESHOLD:
+                remapped_vgs_counts.append(0)
+                idx_offset += index_count
+                continue
+
+            # 如果出现的 VG id 超过 BLOCK_SIZE（例如 >= 512），为了避免越界和不合理的稀疏表，跳过该 component 的 remap
+            if numpy.max(obj_vg_ids) >= BLOCK_SIZE:
+                print(f'WARNING: component has VG id >= {BLOCK_SIZE}, skipping remap for that component.')
+                remapped_vgs_counts.append(0)
+                idx_offset += index_count
+                continue
+
+            remapped_vgs_counts.append(int(obj_vg_ids.size))
+
+            # forward: 索引位置 -> 全局 VG id（用于从本地索引映射到原始 VG id）
+            forward = numpy.zeros(BLOCK_SIZE, dtype=numpy.uint16)
+            forward[numpy.arange(obj_vg_ids.size, dtype=numpy.int32)] = obj_vg_ids.astype(numpy.uint16)
+
+            # reverse: 全局 VG id -> 本地索引（用于从原始 VG id 查找在本 remap block 中的索引）
+            reverse = numpy.zeros(BLOCK_SIZE, dtype=numpy.uint16)
+            reverse[obj_vg_ids.astype(numpy.int32)] = numpy.arange(obj_vg_ids.size, dtype=numpy.uint16)
+
+            blend_remap_forward = numpy.concatenate((blend_remap_forward, forward), axis=0)
+            blend_remap_reverse = numpy.concatenate((blend_remap_reverse, reverse), axis=0)
+
+            idx_offset += index_count
+
+        # 如果存在 remap 数据则写出 remap 文件（Forward/Reverse/Layout）
+        if blend_remap_forward.size > 0:
+            # 只有在存在 remap block 时才写出 VertexVG 文件
+            with open(os.path.join(out_dir, 'BlendRemapVertexVG.buf'), 'wb') as f:
+                vg_out.tofile(f)
+
+            with open(os.path.join(out_dir, 'BlendRemapForward.buf'), 'wb') as f:
+                blend_remap_forward.tofile(f)
+            with open(os.path.join(out_dir, 'BlendRemapReverse.buf'), 'wb') as f:
+                blend_remap_reverse.tofile(f)
+            with open(os.path.join(out_dir, 'BlendRemapLayout.buf'), 'wb') as f:
+                numpy.array(remapped_vgs_counts, dtype=numpy.uint32).tofile(f)
+            print(f'Wrote BlendRemapVertexVG.buf, BlendRemapForward.buf and BlendRemapReverse.buf with {int(len(blend_remap_forward)/BLOCK_SIZE)} blocks')
+        else:
+            print('No remap blocks required (all components have VG ids < 256).')
+
+        return {
+            'vertex_vg_count': vertex_vg_count,
+            'blocks_count': int(len(blend_remap_forward)/BLOCK_SIZE),
+            'counts': remapped_vgs_counts
+        }
     def __init__(self,draw_ib:str,branch_model:BranchModel):
         # (1) 读取工作空间下的Config.json来设置当前DrawIB的别名
         draw_ib_alias_name_dict = ConfigUtils.get_draw_ib_alias_name_dict()
@@ -687,8 +687,8 @@ class DrawIBModelWWMI:
         # components_objs 是你在循环中得到的每个 component_obj 的列表（顺序与 drawib_merged_object 一致）
         # Use WWMI-exact v2 implementation (loop-based unique-first rows).
         # Replaces previous v3 call to ensure BlendRemapVertexVG.buf matches WWMI-Tools.
-        vg_slots = _detect_vg_slots_from_gametype(self.d3d11GameType, default=DEFAULT_VG_SLOTS)
-        summary = export_blendremap_for_components_v2_wwmi(component_obj_list, GlobalConfig.path_generatemod_buffer_folder(), vg_slots=vg_slots)
+        vg_slots = self._detect_vg_slots_from_gametype(self.d3d11GameType, default=DEFAULT_VG_SLOTS)
+        summary = self.export_blendremap_for_components_v2_wwmi(component_obj_list, GlobalConfig.path_generatemod_buffer_folder(), vg_slots=vg_slots)
         print('BlendRemap export summary:', summary)
 
         ObjUtils.join_objects(bpy.context, drawib_merged_object)
