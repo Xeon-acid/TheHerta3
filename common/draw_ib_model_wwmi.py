@@ -21,11 +21,11 @@ from ..base.m_draw_indexed import M_DrawIndexed
 
 from ..config.import_config import ImportConfig
 from .obj_element_model import ObjElementModel
+from .obj_buffer_model import ObjBufferModel
 
 from .branch_model import BranchModel
 
 from ..config.properties_wwmi import Properties_WWMI
-
 
 
 @dataclass
@@ -142,7 +142,8 @@ class DrawIBModelWWMI:
         merged_obj = self.merged_object.object
 
         # 构建ObjBufferModel
-        obj_buffer_model = ObjElementModel(d3d11_game_type=self.d3d11GameType,obj_name=merged_obj.name)
+        obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11GameType,obj_name=merged_obj.name)
+        obj_buffer_model = ObjBufferModel(obj_element_model=obj_element_model)
 
         # 写出到文件
         self.write_out_index_buffer(ib=obj_buffer_model.ib)
