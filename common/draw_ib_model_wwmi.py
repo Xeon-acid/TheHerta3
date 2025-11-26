@@ -20,13 +20,14 @@ from ..base.component_model import ComponentModel
 from ..base.d3d11_gametype import D3D11GameType
 from ..base.m_draw_indexed import M_DrawIndexed
 
-from ..config.import_config import ImportConfig
-from .obj_element_model import ObjElementModel
-from .obj_buffer_model import ObjBufferModel
-
-from .branch_model import BranchModel
-
 from ..config.properties_wwmi import Properties_WWMI
+from ..config.import_config import ImportConfig
+
+from .obj_element_model import ObjElementModel
+from .obj_buffer_model_wwmi import ObjBufferModelWWMI
+from .branch_model import BranchModel
+from .obj_writer import ObjWriter
+
 
 
 @dataclass
@@ -147,9 +148,9 @@ class DrawIBModelWWMI:
         obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11GameType,obj_name=merged_obj.name)
         TimerUtils.End("ObjElementModel")
 
-        TimerUtils.Start("ObjBufferModel")
-        obj_buffer_model = ObjBufferModel(obj_element_model=obj_element_model)
-        TimerUtils.End("ObjBufferModel")
+        TimerUtils.Start("ObjBufferModelWWMI")
+        obj_buffer_model = ObjBufferModelWWMI(obj_element_model=obj_element_model)
+        TimerUtils.End("ObjBufferModelWWMI")
 
         # TODO 这里的写出Buffer文件和获取ShapeKey应该分开
         # 在ObjBufferModel中就应该把所有需要写出的东西都获取完毕了
@@ -159,8 +160,9 @@ class DrawIBModelWWMI:
         # 但是由于每个游戏的Buffer写出方式可能不一样
         # 所以最好是专门开一个类，专门负责Buffer写出到文件
 
-        # 写出到文件
-        self.write_out_index_buffer(ib=obj_buffer_model.ib)
+        # 写出Index.buf
+        ObjWriter.write_ib_buf_r32_uint(obj_buffer_model.ib,self.draw_ib + "-Component1.buf")
+        
         # 传入 index_vertex_id_dict 以便在需要 remap 时能够知道每个唯一顶点对应的原始顶点 id
         self.write_out_category_buffer(category_buffer_dict=obj_buffer_model.category_buffer_dict, index_vertex_id_dict=obj_buffer_model.index_vertex_id_dict)
         self.write_out_shapekey_buffer(merged_obj=merged_obj, index_vertex_id_dict=obj_buffer_model.index_vertex_id_dict)
@@ -272,12 +274,6 @@ class DrawIBModelWWMI:
 
 
 
-    def write_out_index_buffer(self,ib):
-        buf_output_folder = GlobalConfig.path_generatemod_buffer_folder()
-
-        packed_data = struct.pack(f'<{len(ib)}I', *ib)
-        with open(buf_output_folder + self.draw_ib + "-Component1.buf", 'wb') as ibf:
-            ibf.write(packed_data) 
 
     def write_out_category_buffer(self, category_buffer_dict, index_vertex_id_dict=None):
         __categoryname_bytelist_dict = {}

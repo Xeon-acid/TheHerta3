@@ -17,7 +17,7 @@ from ..utils.tips_utils import TipUtils
 from ..base.obj_data_model import ObjDataModel
 
 from .obj_element_model import ObjElementModel
-from .obj_buffer_model import ObjBufferModel
+from .obj_buffer_model_unity import ObjBufferModelUnity
 
 from ..base.m_global_key_counter import M_GlobalKeyCounter
 
@@ -273,7 +273,7 @@ class BranchModel:
 
                 # print("DrawIB BranchModel")
                 obj_element_model = ObjElementModel(d3d11_game_type=d3d11_game_type,obj_name=obj_name)
-                obj_buffer_model = ObjBufferModel(obj_element_model=obj_element_model)
+                obj_buffer_model = ObjBufferModelUnity(obj_element_model=obj_element_model)
                 # print(len(category_buffer_dict["Blend"]))
                 # print(len(index_vertex_id_dict))
                 
