@@ -30,10 +30,27 @@ class ObjElementModel:
     '''
     这个类只负责把Blender的数据转换为element_ndarray的dict
     然后后面可以根据element来获取其数据就足够了
+
+    TODO 目前的架构还是有问题，这里应该是先从obj获取数据
+    获取的数据根据Element存放好
+    后面再来一层转换层，把数据再转换为带dtype的形式，而不是在这里创建的时候就转换好
+    不然的话就会遇到uint8但是实际上需要uint16的情况
+    然后这个uint8声明的时候就限制死了dtype导致后续替换流程特别麻烦
+    所以现在这么复杂，基本上就是由于层级拆分不明确导致的，后面必须重构
+
+    TODO 暂时先不管了，先去完成ini生成的部分，不然不管我们怎么改，都无法去游戏里验证实际效果
+    修改完ini的部分就回来拆分这里的部分。
+
     '''
     # 初始化时必须填的字段
     d3d11_game_type:D3D11GameType
     obj_name:str
+    # Optional override for BLENDINDICES values (per-loop). If provided,
+    # should be a numpy ndarray of shape (n_loops, N) or a dict keyed by
+    # semantic index mapping to ndarray. This allows callers to provide
+    # remapped (local) indices before the structured element array is
+    # allocated to avoid truncation.
+    blendindices_override: object = field(default=None, repr=False)
 
     # 外用字段
     obj:bpy.types.Object = field(init=False,repr=False)
@@ -110,6 +127,7 @@ class ObjElementModel:
         loop_vertex_indices = numpy.empty(mesh_loops_length, dtype=int)
         mesh_loops.foreach_get("vertex_index", loop_vertex_indices)
 
+
         self.dtype = numpy.dtype([])
 
         # 预设的权重个数，也就是每个顶点组受多少个权重影响
@@ -129,11 +147,6 @@ class ObjElementModel:
                 self.dtype = numpy.dtype(self.dtype.descr + [(d3d11_element_name, (np_type, (1,)))])
             else:
                 self.dtype = numpy.dtype(self.dtype.descr + [(d3d11_element_name, (np_type, format_len))])
-            
-            # print("d3d11Element: " + d3d11_element_name + "  Dtype" + str(self.dtype))
-
-        self.element_vertex_ndarray = numpy.zeros(mesh_loops_length,dtype=self.dtype)
-
 
 
         normalize_weights = "Blend" in self.d3d11_game_type.OrderedCategoryNameList
@@ -151,39 +164,77 @@ class ObjElementModel:
         else:
             blendweights_dict, blendindices_dict = VertexGroupUtils.get_blendweights_blendindices_v3(mesh=self.mesh,normalize_weights = normalize_weights)
 
+        # 保存 raw blendindices（未经过 FormatUtils 打包或截断的原始全局 VG 索引）
+        # blendindices_dict 的每个条目是 shape (n_loops, groups_per_set)，按语义索引（0..）排列
+        try:
+            keys = sorted(blendindices_dict.keys())
+            parts = [blendindices_dict[k] for k in keys]
+            if len(parts) == 1:
+                self.raw_blendindices = parts[0].astype(numpy.uint32)
+            else:
+                self.raw_blendindices = numpy.concatenate(parts, axis=1).astype(numpy.uint32)
+        except Exception:
+            self.raw_blendindices = None
+
+        # If caller provided a precomputed remapped blendindices array or
+        # dict, use it for populating element fields (this implements the
+        # remap-before-pack behavior). Preserve `self.raw_blendindices` as
+        # the original global indices.
+        if self.blendindices_override is not None:
+            try:
+                if isinstance(self.blendindices_override, dict):
+                    blendindices_dict = self.blendindices_override
+                else:
+                    # single ndarray -> assign to semantic 0
+                    blendindices_dict = {0: numpy.asarray(self.blendindices_override)}
+            except Exception:
+                # fallback: ignore override
+                pass
+
+
+        # Preserve the structured dtype layout defined by the D3D11 config.
+        # Changing the scalar type for BLENDINDICES would change the total
+        # row byte size and break the category-byte slicing later on. Instead
+        # keep the original dtype and record whether any raw blend index
+        # exceeds 255 so callers can handle it (remap, larger index types,
+        # or fail explicitly).
+        self._blendindices_overflow = False
+        if self.raw_blendindices is not None:
+            try:
+                max_index = int(numpy.max(self.raw_blendindices))
+            except Exception:
+                max_index = 0
+
+            if max_index > 255:
+                self._blendindices_overflow = True
+                if max_index > 65535:
+                    print(f"BLENDINDICES max value {max_index} > 65535; needs uint32 handling")
+                else:
+                    print(f"BLENDINDICES max value {max_index} > 255; needs uint16 handling")
+
+        # Create the element array with the original dtype (matching ByteWidth)
+        self.element_vertex_ndarray = numpy.zeros(mesh_loops_length, dtype=self.dtype)
+
 
         # 对每一种Element都获取对应的数据
         for d3d11_element_name in self.d3d11_game_type.OrderedFullElementList:
             d3d11_element = self.d3d11_game_type.ElementNameD3D11ElementDict[d3d11_element_name]
 
             if d3d11_element_name == 'POSITION':
-                # TimerUtils.Start("Position Get")
                 vertex_coords = numpy.empty(mesh_vertices_length * 3, dtype=numpy.float32)
-                # Notice: 'undeformed_co' is static, don't need dynamic calculate like 'co' so it is faster.
-                # mesh_vertices.foreach_get('undeformed_co', vertex_coords)
+                # Follow WWMI-Tools: fetch the undeformed vertex coordinates and do
+                # not apply mirroring or dtype conversion at extraction stage.
                 mesh_vertices.foreach_get('co', vertex_coords)
-                
-                positions = vertex_coords.reshape(-1, 3)[loop_vertex_indices]
-                # print("Position Length: " + str(len(positions)))
-                
-                # XXX 翻转X轴，Blender的X轴是左手系，D3D11是右手系
-                # 这一步是为了解决导入的模型是镜像的问题
-                if Properties_ImportModel.use_mirror_workflow():
-                    positions[:, 0] *= -1 
 
-                if d3d11_element.Format == 'R16G16B16A16_FLOAT':
-                    positions = positions.astype(numpy.float16)
-                    new_array = numpy.zeros((positions.shape[0], 4))
-                    new_array[:, :3] = positions
-                    positions = new_array
+                positions = vertex_coords.reshape(-1, 3)[loop_vertex_indices]
+
                 if d3d11_element.Format == 'R32G32B32A32_FLOAT':
-                    positions = positions.astype(numpy.float32)
-                    new_array = numpy.zeros((positions.shape[0], 4))
+                    # If format expects 4 components, add a zero alpha column (float32)
+                    new_array = numpy.zeros((positions.shape[0], 4), dtype=numpy.float32)
                     new_array[:, :3] = positions
                     positions = new_array
-                
+
                 self.element_vertex_ndarray[d3d11_element_name] = positions
-                # TimerUtils.End("Position Get") # 0:00:00.057535 
 
             elif d3d11_element_name == 'NORMAL':
                 if d3d11_element.Format == 'R16G16B16A16_FLOAT':
@@ -424,12 +475,26 @@ class ObjElementModel:
                 elif d3d11_element.Format == 'R8G8B8A8_UNORM':
                     self.element_vertex_ndarray[d3d11_element_name] = FormatUtils.convert_4x_float32_to_r8g8b8a8_unorm(blendindices)
                 elif d3d11_element.Format == 'R8G8B8A8_UINT':
+                    # TODO 这里类型截断错了吧，假如我们的全局顶点组索引是256或者300呢？
+                    # 这里截断直接没了，后续我们还怎么去和remap里进行映射？
+                    # 帮我在这里新加一个判断，如果blendindices里有大于255的值就不能转换为uint8
                     # print("uint8")
-                    blendindices.astype(numpy.uint8)
+                    max_index = numpy.max(blendindices)
+                    if max_index > 255:
+                        print("BLENDINDICES大于255了,最大值是：" + str(max_index))
+                    else:
+                        blendindices.astype(numpy.uint8)
                     self.element_vertex_ndarray[d3d11_element_name] = blendindices
+                    print(self.element_vertex_ndarray[d3d11_element_name].dtype)
                 elif d3d11_element.Format == "R8_UINT" and d3d11_element.ByteWidth == 8:
-                    blendindices.astype(numpy.uint8)
+                    max_index = numpy.max(blendindices)
+                    if max_index > 255:
+                        print("BLENDINDICES大于255了,最大值是：" + str(max_index))
+                    else:
+                        blendindices.astype(numpy.uint8)
+
                     self.element_vertex_ndarray[d3d11_element_name] = blendindices
+                    print(self.element_vertex_ndarray[d3d11_element_name].dtype)
                     print("WWMI R8_UINT特殊处理")
                 elif d3d11_element.Format == "R16_UINT" and d3d11_element.ByteWidth == 16:
                     blendindices.astype(numpy.uint16)

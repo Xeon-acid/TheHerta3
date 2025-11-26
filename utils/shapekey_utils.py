@@ -269,7 +269,7 @@ class ShapeKeyUtils:
         '''
         Numpy优化版本，快很多
         '''
-        # TimerUtils.Start("shapekey_cache")
+        TimerUtils.Start("shapekey_cache")
         obj = merged_obj
         mesh = obj.data
         mesh_shapekeys = mesh.shape_keys
@@ -342,7 +342,7 @@ class ShapeKeyUtils:
                     for index_id in vertex_to_indices[v_idx]:
                         shapekey_cache[shapekey_idx][index_id] = offset_list
 
-        # TimerUtils.End("shapekey_cache")
+        TimerUtils.End("shapekey_cache")
         return shapekey_cache
     
 
@@ -416,3 +416,5 @@ class ShapeKeyUtils:
 
         TimerUtils.End("process shapekey data")
         return shapekey_offsets, shapekey_vertex_ids, shapekey_vertex_offsets
+
+

@@ -50,3 +50,35 @@ class ObjWriter:
         float_array = numpy.array(shapekey_vertex_offsets, dtype=numpy.float32).astype(numpy.float16)
         with open(GlobalConfig.path_generatemod_buffer_folder() + filename, 'wb') as file:
             float_array.tofile(file)
+
+    @staticmethod
+    def write_buf_blendindices_uint16(blendindices, filename: str):
+        """
+        Write BLENDINDICES array to disk as uint16 values.
+
+        `blendindices` may be a numpy array of shape (loops,) or (loops, N)
+        or a Python sequence. This function will convert/cast it to
+        uint16 and write the raw bytes to the buffer folder.
+        """
+        arr = numpy.asarray(blendindices)
+
+        # If structured dtype, try to view first field
+        if arr.dtype.names:
+            # pick first named field
+            arr = arr[arr.dtype.names[0]]
+
+        # Ensure numeric integer shape: flatten rows if 2D
+        if arr.ndim > 1:
+            arr_to_write = arr.reshape(-1)
+        else:
+            arr_to_write = arr
+
+        # Cast to uint16 (safe truncation assumed per format expectations)
+        arr_uint16 = arr_to_write.astype(numpy.uint16)
+
+        out_path = os.path.join(GlobalConfig.path_generatemod_buffer_folder(), filename)
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+        with open(out_path, 'wb') as f:
+            arr_uint16.tofile(f)

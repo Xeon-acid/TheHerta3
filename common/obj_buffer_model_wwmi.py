@@ -101,25 +101,64 @@ class ObjBufferModelWWMI:
             raw = vb.tobytes()
             row_bytes = np.frombuffer(raw, dtype=np.uint8).reshape(n_loops, row_size)
 
-        # (3) unique + inverse 映射
-        unique_rows, unique_first_indices, inverse = np.unique(
-            row_bytes, axis=0, return_index=True, return_inverse=True
+        # WWMI-Tools deduplicates loop rows including the loop's VertexId -> they
+        # effectively perform uniqueness on loop attributes + VertexId treated as
+        # a field. To replicate that reliably (preserving structured field layout
+        # and alignment) we build a structured array that copies all existing
+        # fields and appends a 'VERTEXID' uint32 field, then call np.unique on it.
+        # Afterwards we select unique rows from the original `row_bytes` using
+        # the indices returned by np.unique to preserve exact original layout.
+
+        # Build 4-byte vertex index array (little-endian) and concatenate to row bytes
+        # to form combined rows: [row_bytes | vid_bytes]. Use np.unique on combined
+        # rows to get uniqueness, then reorder unique results to match insertion
+        # order (first occurrence). This vectorized path keeps behavior identical
+        # to the OrderedDict+bytes approach but runs much faster in numpy.
+        # Build 4-byte vertex index array (little-endian)
+        vid_bytes = loop_vertex_indices.astype(numpy.uint32).view(numpy.uint8).reshape(n_loops, 4)
+
+        # Combine row bytes + vid bytes, but to make np.unique faster we pad the
+        # combined row to a multiple of 8 bytes and view it as uint64 blocks.
+        total_bytes = row_size + 4
+        pad = (-total_bytes) % 8
+        padded_width = total_bytes + pad
+
+        # Allocate padded combined buffer and fill
+        combined_padded = np.zeros((n_loops, padded_width), dtype=np.uint8)
+        combined_padded[:, :row_size] = row_bytes
+        combined_padded[:, row_size:row_size+4] = vid_bytes
+
+        # View as uint64 blocks (shape: n_loops x n_blocks)
+        n_blocks = padded_width // 8
+        combined_u64 = combined_padded.view(np.uint64).reshape(n_loops, n_blocks)
+
+        # Create a structured view so np.unique treats each row as a single record
+        dtype_descr = [(f'f{i}', np.uint64) for i in range(n_blocks)]
+        structured = combined_u64.view(numpy.dtype(dtype_descr)).reshape(n_loops)
+
+        unique_struct, unique_first_indices, inverse = numpy.unique(
+            structured, return_index=True, return_inverse=True
         )
 
+        # Remap unique ids to insertion order (first occurrence order)
+        order = numpy.argsort(unique_first_indices)
+        new_id = numpy.empty_like(order)
+        new_id[order] = numpy.arange(len(order), dtype=new_id.dtype)
+        inverse = new_id[inverse]
+
+        unique_first_indices_insertion = unique_first_indices[order]
+
+        # Pick original unique rows from row_bytes using insertion-ordered indices
+        unique_rows = row_bytes[unique_first_indices_insertion]
+
         # 构建 index -> original vertex id（使用每个 unique 行的第一个 loop 对应的 vertex）
-        index_vertex_id_dict = {
-            int(uid): int(loop_vertex_indices[int(pos)])
-            for uid, pos in enumerate(unique_first_indices)
-        }
+        original_vertex_ids = loop_vertex_indices[unique_first_indices_insertion]
+        index_vertex_id_dict = dict(enumerate(original_vertex_ids.astype(int).tolist()))
 
         # (4) 为每个 polygon 构建 IB（使用 inverse 映射）
-        ib_lists = []
-        for poly in self.mesh.polygons:
-            s = poly.loop_start
-            t = poly.loop_total
-            ib_lists.append(inverse[s:s + t].tolist())
-
-        flattened_ib = [int(x) for sub in ib_lists for x in sub]
+        # inverse is already ordered by loops; concatenating polygon slices in
+        # polygon order is equivalent to taking inverse in sequence.
+        flattened_ib_arr = inverse.astype(numpy.int32)
 
         # (5) 按 category 从 unique_rows 切分 bytes 序列
         category_stride_dict = self.d3d11_game_type.get_real_category_stride_dict()
@@ -130,13 +169,15 @@ class ObjBufferModelWWMI:
             stride_offset += cstride
 
         # (6) 翻转三角形方向（高效）
-        flat_arr = np.array(flattened_ib, dtype=int)
+        flat_arr = flattened_ib_arr
         if flat_arr.size % 3 == 0:
             flipped = flat_arr.reshape(-1, 3)[:, ::-1].flatten().tolist()
         else:
+            # Rare irregular case: fallback to python loop on numpy array
             flipped = []
-            for i in range(0, len(flattened_ib), 3):
-                tri = flattened_ib[i:i + 3]
+            iarr = flat_arr.tolist()
+            for i in range(0, len(iarr), 3):
+                tri = iarr[i:i + 3]
                 flipped.extend(tri[::-1])
 
         # (7) 写回到 self（与原函数一致的字段）
