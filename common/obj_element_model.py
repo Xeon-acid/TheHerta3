@@ -184,22 +184,13 @@ class ObjElementModel:
         else:
             blendweights_dict, blendindices_dict = VertexGroupUtils.get_blendweights_blendindices_v3(mesh=self.mesh,normalize_weights = normalize_weights)
 
-        # 保存 raw blendindices（未经过 FormatUtils 打包或截断的原始全局 VG 索引）
-        # blendindices_dict 的每个条目是 shape (n_loops, groups_per_set)，按语义索引（0..）排列
-        try:
-            keys = sorted(blendindices_dict.keys())
-            parts = [blendindices_dict[k] for k in keys]
-            if len(parts) == 1:
-                self.raw_blendindices = parts[0].astype(numpy.uint32)
-            else:
-                self.raw_blendindices = numpy.concatenate(parts, axis=1).astype(numpy.uint32)
-        except Exception:
-            self.raw_blendindices = None
-
+        # The per-loop BLENDINDICES values are available in `blendindices_dict`
+        # (one entry per semantic index). We intentionally do NOT keep a
+        # separate `raw_blendindices` attribute here — the extracted per-
+        # element data will be placed into `self.elementname_data_dict['BLENDINDICES']`.
         # If caller provided a precomputed remapped blendindices array or
         # dict, use it for populating element fields (this implements the
-        # remap-before-pack behavior). Preserve `self.raw_blendindices` as
-        # the original global indices.
+        # remap-before-pack behavior).
         if self.blendindices_override is not None:
             try:
                 if isinstance(self.blendindices_override, dict):

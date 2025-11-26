@@ -72,12 +72,14 @@ class DrawIBModelWWMI:
     merged_object:MergedObject = field(init=False)
     obj_name_drawindexed_dict:dict[str,M_DrawIndexed] = field(init=False,default_factory=dict)
 
+    # 是否启用Blend Remap技术
     blend_remap:bool = field(init=False,default=False)
-    # NOTE: local remap rows are computed during export but not persisted on the instance
     
     obj_buffer_model_wwmi:ObjBufferModelWWMI = field(init=False,default=False)
-
+    
     blend_remap_maps:dict = field(init=False,default_factory=dict)
+    # Per-component boolean: component name -> whether that component uses remap
+    blend_remap_used: dict = field(init=False, default_factory=dict)
 
     def __post_init__(self):
         # (1) 读取工作空间下的Config.json来设置当前DrawIB的别名
@@ -221,12 +223,9 @@ class DrawIBModelWWMI:
         obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11GameType,obj_name=merged_obj.name, blendindices_override=blendindices_override)
         TimerUtils.End("ObjElementModel")
 
-        # 保存 remap 之前的 BLENDINDICES（按 loop 存储），优先使用 ObjElementModel.raw_blendindices（未被类型截断）
-        pre_remap_blendindices = None
-        if hasattr(obj_element_model, 'raw_blendindices') and obj_element_model.raw_blendindices is not None:
-            pre_remap_blendindices = obj_element_model.raw_blendindices.copy()
-        elif hasattr(obj_element_model, 'element_vertex_ndarray') and 'BLENDINDICES' in obj_element_model.element_vertex_ndarray.dtype.names:
-            pre_remap_blendindices = obj_element_model.element_vertex_ndarray['BLENDINDICES'].copy()
+        # 原始 BLENDINDICES 不再长期存储为单独变量；在需要时直接从
+        # `obj_element_model.elementname_data_dict['BLENDINDICES']` 或者
+        # `obj_element_model.element_vertex_ndarray['BLENDINDICES']` 读取。
 
         # If we didn't pass a precomputed `blendindices_override` into
         # ObjElementModel, and we do have remap maps, apply remap now. If
@@ -272,6 +271,12 @@ class DrawIBModelWWMI:
                             vertex_to_first_loop[int(vid)] = li
 
                 # For each unique index (0..unique_count-1), get original vertex id and read its pre-remap BLENDINDICES
+                # Compute original per-loop BLENDINDICES source on demand (no long-lived copy)
+                if hasattr(obj_element_model, 'elementname_data_dict') and 'BLENDINDICES' in obj_element_model.elementname_data_dict and obj_element_model.elementname_data_dict['BLENDINDICES'] is not None:
+                    _pre_blend = obj_element_model.elementname_data_dict['BLENDINDICES']
+                else:
+                    _pre_blend = None
+
                 for uniq_idx in range(unique_count):
                     orig_vid = index_vertex_id_dict.get(uniq_idx, None)
                     if orig_vid is None:
@@ -279,15 +284,15 @@ class DrawIBModelWWMI:
 
                     written = False
                     # Prefer pre-remap BLENDINDICES sampled at a representative loop for this vertex
-                    if pre_remap_blendindices is not None and vertex_to_first_loop:
+                    if _pre_blend is not None and vertex_to_first_loop:
                         loop_idx = vertex_to_first_loop.get(int(orig_vid), None)
-                        if loop_idx is not None and loop_idx < len(pre_remap_blendindices):
-                            # pre_remap_blendindices may be 1D or 2D
-                            if getattr(pre_remap_blendindices, 'ndim', 1) == 1:
-                                vg_array[uniq_idx, 0] = int(pre_remap_blendindices[loop_idx])
+                        if loop_idx is not None and loop_idx < len(_pre_blend):
+                            # _pre_blend may be 1D or 2D
+                            if getattr(_pre_blend, 'ndim', 1) == 1:
+                                vg_array[uniq_idx, 0] = int(_pre_blend[loop_idx])
                                 written = True
                             else:
-                                vals = pre_remap_blendindices[loop_idx]
+                                vals = _pre_blend[loop_idx]
                                 for i in range(min(num_vgs, len(vals))):
                                     vg_array[uniq_idx, i] = int(vals[i])
                                 written = True
@@ -347,6 +352,8 @@ class DrawIBModelWWMI:
         all_vg_ids = []
         # Per-component remap maps: { component_name: { 'forward': [orig_vg_ids], 'reverse': {orig->local} } }
         remap_maps: dict[str, dict] = {}
+        # Per-component boolean indicating whether remap was used for that component
+        remap_used: dict[str, bool] = {}
 
         for comp_obj in components_objs:
             # Ensure we have the evaluated mesh/obj available
@@ -377,6 +384,7 @@ class DrawIBModelWWMI:
                 # No remapping required for this component
                 remapped_vgs_counts.append(0)
                 remap_maps[comp_obj.name] = { 'forward': [], 'reverse': {} }
+                remap_used[comp_obj.name] = False
                 continue
 
             # Create forward and reverse remap arrays (512 entries each, uint16)
@@ -396,6 +404,7 @@ class DrawIBModelWWMI:
             forward_list = [int(x) for x in obj_vg_ids.tolist()]
             reverse_map = { int(v): int(i) for i, v in enumerate(forward_list) }
             remap_maps[comp_obj.name] = { 'forward': forward_list, 'reverse': reverse_map }
+            remap_used[comp_obj.name] = True
 
         # If there are per-component VG arrays, concatenate into single array
         if len(all_vg_ids) > 0:
@@ -423,6 +432,8 @@ class DrawIBModelWWMI:
 
         # Expose the remap maps on the instance for later use (original vg id -> local compact id)
         self.blend_remap_maps = remap_maps
+        # also expose which components actually used remapping
+        self.blend_remap_used = remap_used
 
         # Return the buffers and the remap maps for convenience (caller may ignore)
         return blend_remap_forward, blend_remap_reverse, vg_concat, remap_maps
