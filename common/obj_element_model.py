@@ -193,7 +193,7 @@ class ObjElementModel:
         # normalize_weights = False
 
         if GlobalConfig.logic_name == LogicName.WWMI:
-            print("鸣潮专属测试版权重处理：")
+            # print("鸣潮专属测试版权重处理：")
             blendweights_dict, blendindices_dict = VertexGroupUtils.get_blendweights_blendindices_v4_fast(mesh=self.mesh,normalize_weights = normalize_weights,blend_size=blend_size)
 
         elif GlobalConfig.logic_name == LogicName.SnowBreak:
@@ -480,7 +480,7 @@ class ObjElementModel:
                     else:
                         blendindices.astype(numpy.uint8)
                     self.original_elementname_data_dict[d3d11_element_name] = blendindices
-                    print(self.original_elementname_data_dict[d3d11_element_name].dtype)
+                    # print(self.original_elementname_data_dict[d3d11_element_name].dtype)
                 elif d3d11_element.Format == "R8_UINT" and d3d11_element.ByteWidth == 8:
                     max_index = numpy.max(blendindices)
                     if max_index > 255:
@@ -489,14 +489,14 @@ class ObjElementModel:
                         blendindices.astype(numpy.uint8)
 
                     self.original_elementname_data_dict[d3d11_element_name] = blendindices
-                    print(self.original_elementname_data_dict[d3d11_element_name].dtype)
-                    print("WWMI R8_UINT特殊处理")
+                    # print(self.original_elementname_data_dict[d3d11_element_name].dtype)
+                    # print("WWMI R8_UINT特殊处理")
                 elif d3d11_element.Format == "R16_UINT" and d3d11_element.ByteWidth == 16:
                     blendindices.astype(numpy.uint16)
                     self.original_elementname_data_dict[d3d11_element_name] = blendindices
-                    print("WWMI R16_UINT特殊处理")
+                    # print("WWMI R16_UINT特殊处理")
                 else:
-                    print(blendindices.shape)
+                    # print(blendindices.shape)
                     raise Fatal("未知的BLENDINDICES格式")
                 
             elif d3d11_element_name.startswith('BLENDWEIGHT'):
@@ -523,11 +523,11 @@ class ObjElementModel:
                 elif d3d11_element.Format == 'R16G16B16A16_FLOAT':
                     self.original_elementname_data_dict[d3d11_element_name] = blendweights.astype(numpy.float16)
                 elif d3d11_element.Format == "R8_UNORM" and d3d11_element.ByteWidth == 8:
-                    TimerUtils.Start("WWMI BLENDWEIGHT R8_UNORM特殊处理")
+                    # TimerUtils.Start("WWMI BLENDWEIGHT R8_UNORM特殊处理")
                     blendweights = FormatUtils.convert_4x_float32_to_r8g8b8a8_unorm_blendweights(blendweights)
                     self.original_elementname_data_dict[d3d11_element_name] = blendweights
                     print("WWMI R8_UNORM特殊处理")
-                    TimerUtils.End("WWMI BLENDWEIGHT R8_UNORM特殊处理")
+                    # TimerUtils.End("WWMI BLENDWEIGHT R8_UNORM特殊处理")
 
                 else:
                     print(blendweights.shape)

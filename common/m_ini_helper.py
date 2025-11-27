@@ -155,7 +155,6 @@ class M_IniHelper:
         Move all textures from extracted game type folder to generate mod Texture folder.
         Only works in default slot style texture.
         '''
-        print("move_slot_style_textures::start")
         if Properties_GenerateMod.forbid_auto_texture_ini():
             return
         

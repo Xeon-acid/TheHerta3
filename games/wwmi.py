@@ -156,69 +156,68 @@ class ModModelWWMI:
                     blend_remap_section.append("[ResourceExtraRemappedSkeletonComponent" + str(component_count) + "]")
                     blend_remap_section.new_line()
 
-            blend_remap_section.append("[CommandListInitializeBlendRemaps]")
-            blend_remap_section.append("local $blend_remaps_initialized")
-            blend_remap_section.append("if !$blend_remaps_initialized")
-            blend_remap_section.append("  ResourceRemappedSkeletonRW = copy ResourceMergedSkeletonRW")
-            blend_remap_section.append("  ResourceExtraRemappedSkeletonRW = copy ResourceExtraMergedSkeletonRW")
-            blend_remap_section.new_line()
-            blend_remap_section.append("  $\\WWMIv1\\custom_vertex_count = $mesh_vertex_count")
-            blend_remap_section.append("  $\\WWMIv1\\weights_per_vertex_count = 8") # TODO 这里后续要改成动态获取
-            blend_remap_section.append("  cs-t34 = ref ResourceBlendRemapReverseBuffer")
-            blend_remap_section.append("  cs-t35 = ref ResourceBlendRemapVertexVGBuffer")
+            if draw_ib_model.blend_remap:
+                blend_remap_section.append("[CommandListInitializeBlendRemaps]")
+                blend_remap_section.append("local $blend_remaps_initialized")
+                blend_remap_section.append("if !$blend_remaps_initialized")
+                blend_remap_section.append("  ResourceRemappedSkeletonRW = copy ResourceMergedSkeletonRW")
+                blend_remap_section.append("  ResourceExtraRemappedSkeletonRW = copy ResourceExtraMergedSkeletonRW")
+                blend_remap_section.new_line()
+                blend_remap_section.append("  $\\WWMIv1\\custom_vertex_count = $mesh_vertex_count")
+                blend_remap_section.append("  $\\WWMIv1\\weights_per_vertex_count = 8") # TODO 这里后续要改成动态获取
+                blend_remap_section.append("  cs-t34 = ref ResourceBlendRemapReverseBuffer")
+                blend_remap_section.append("  cs-t35 = ref ResourceBlendRemapVertexVGBuffer")
 
-            blend_remap_id = 0
-            for component_tmp_obj_name, use_remap in draw_ib_model.blend_remap_used.items():
-                if use_remap:
-                    component_count = int(component_tmp_obj_name.split("-")[1]) - 1
-                    component_count_str = str(component_count)
-                    blend_remap_section.append("    $\\WWMIv1\\blend_remap_id = " + str(blend_remap_id))
-                    blend_remap_section.append("    ResourceRemappedBlendBufferRW = copy ResourceBlendBufferNoStride")
-                    blend_remap_section.append("    cs-u4 = ref ResourceRemappedBlendBufferRW")
-                    blend_remap_section.append("    run = CustomShader\\WWMIv1\\BlendRemapper")
-                    blend_remap_section.append("    ResourceRemappedBlendBufferComponent" + component_count_str + " = copy ResourceRemappedBlendBufferRW")
-                    blend_remap_section.append("    ResourceRemappedBlendBufferComponent" + component_count_str + " = copy_desc ResourceBlendBuffer")
-                    blend_remap_section.new_line()
+                blend_remap_id = 0
+                for component_tmp_obj_name, use_remap in draw_ib_model.blend_remap_used.items():
+                    if use_remap:
+                        component_count = int(component_tmp_obj_name.split("-")[1]) - 1
+                        component_count_str = str(component_count)
+                        blend_remap_section.append("    $\\WWMIv1\\blend_remap_id = " + str(blend_remap_id))
+                        blend_remap_section.append("    ResourceRemappedBlendBufferRW = copy ResourceBlendBufferNoStride")
+                        blend_remap_section.append("    cs-u4 = ref ResourceRemappedBlendBufferRW")
+                        blend_remap_section.append("    run = CustomShader\\WWMIv1\\BlendRemapper")
+                        blend_remap_section.append("    ResourceRemappedBlendBufferComponent" + component_count_str + " = copy ResourceRemappedBlendBufferRW")
+                        blend_remap_section.append("    ResourceRemappedBlendBufferComponent" + component_count_str + " = copy_desc ResourceBlendBuffer")
+                        blend_remap_section.new_line()
 
-                    blend_remap_id = blend_remap_id + 1
+                        blend_remap_id = blend_remap_id + 1
 
-            blend_remap_section.append("    $blend_remaps_initialized = 1")
-            blend_remap_section.append("endif")
-            blend_remap_section.new_line()
+                blend_remap_section.append("    $blend_remaps_initialized = 1")
+                blend_remap_section.append("endif")
+                blend_remap_section.new_line()
 
             blend_remap_section.append("[CommandListRemapMergedSkeleton]")
             blend_remap_section.append("ResourceMergedSkeletonRemap = copy ResourceMergedSkeletonRW")
             blend_remap_section.append("ResourceExtraMergedSkeletonRemap = copy ResourceExtraMergedSkeletonRW")
             blend_remap_section.new_line()
-            blend_remap_section.append("cs-t37 = ResourceBlendRemapForwardBuffer")
-            blend_remap_section.new_line()
-
-            # TODO 在这里我要获取每个component的vg数量，怎么办？
-            # 使用 draw_ib_model.extracted_object.components 中的 vg_count 字段。
-            # draw_ib_model.blend_remap_used 的 key 命名为 Component-<n> 或类似格式，
-            # 这里按相同的方式解析出 component 索引并取出对应的 vg_count。
-            blend_remap_id = 0
-            for component_tmp_obj_name, use_remap in draw_ib_model.blend_remap_used.items():
-                if not use_remap:
-                    continue
-
-                blend_remap_section.append("$\\WWMIv1\\blend_remap_id = " + str(blend_remap_id))
-
-                component_count = int(component_tmp_obj_name.split("-")[1]) - 1
-                vg_count = draw_ib_model.extracted_object.components[component_count].vg_count
-                # 从 extracted_object 中读取预先记录的 vg_count（此处代表该 component 总的 VG 数量）
-                blend_remap_section.append("$\\WWMIv1\\vg_count = " + str(vg_count))
-                blend_remap_section.append("cs-t38 = ResourceMergedSkeletonRemap")
-                blend_remap_section.append("cs-u5 = ResourceRemappedSkeletonRW")
-                blend_remap_section.append("run = CustomShader\\WWMIv1\\SkeletonRemapper")
-                blend_remap_section.append("ResourceRemappedSkeletonComponent" + str(component_count) +" = copy ResourceRemappedSkeletonRW")
-                blend_remap_section.append("cs-t38 = ResourceExtraMergedSkeletonRemap")
-                blend_remap_section.append("cs-u5 = ResourceExtraRemappedSkeletonRW")
-                blend_remap_section.append("run = CustomShader\\WWMIv1\\SkeletonRemapper")
-                blend_remap_section.append("ResourceExtraRemappedSkeletonComponent" + str(component_count) +" = copy ResourceExtraRemappedSkeletonRW")
+            if draw_ib_model.blend_remap:
+                blend_remap_section.append("cs-t37 = ResourceBlendRemapForwardBuffer")
                 blend_remap_section.new_line()
 
-                blend_remap_id = blend_remap_id + 1
+
+                blend_remap_id = 0
+                for component_tmp_obj_name, use_remap in draw_ib_model.blend_remap_used.items():
+                    if not use_remap:
+                        continue
+
+                    blend_remap_section.append("$\\WWMIv1\\blend_remap_id = " + str(blend_remap_id))
+
+                    component_count = int(component_tmp_obj_name.split("-")[1]) - 1
+                    vg_count = draw_ib_model.extracted_object.components[component_count].vg_count
+                    # 从 extracted_object 中读取预先记录的 vg_count（此处代表该 component 总的 VG 数量）
+                    blend_remap_section.append("$\\WWMIv1\\vg_count = " + str(vg_count))
+                    blend_remap_section.append("cs-t38 = ResourceMergedSkeletonRemap")
+                    blend_remap_section.append("cs-u5 = ResourceRemappedSkeletonRW")
+                    blend_remap_section.append("run = CustomShader\\WWMIv1\\SkeletonRemapper")
+                    blend_remap_section.append("ResourceRemappedSkeletonComponent" + str(component_count) +" = copy ResourceRemappedSkeletonRW")
+                    blend_remap_section.append("cs-t38 = ResourceExtraMergedSkeletonRemap")
+                    blend_remap_section.append("cs-u5 = ResourceExtraRemappedSkeletonRW")
+                    blend_remap_section.append("run = CustomShader\\WWMIv1\\SkeletonRemapper")
+                    blend_remap_section.append("ResourceExtraRemappedSkeletonComponent" + str(component_count) +" = copy ResourceExtraRemappedSkeletonRW")
+                    blend_remap_section.new_line()
+
+                    blend_remap_id = blend_remap_id + 1
         
         ini_builder.append_section(blend_remap_section)
 
@@ -621,18 +620,18 @@ class ModModelWWMI:
             resource_buffer_section.append("filename = Buffer/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
             resource_buffer_section.new_line()
 
-            if category_name == "Blend":
+            if category_name == "Blend" and draw_ib_model.blend_remap:
                 # 额外添加一个NoStride的BlendBuffer，用于BlendRemapper
                 resource_buffer_section.append("[ResourceBlendBufferNoStride]")
                 resource_buffer_section.append("type = Buffer")
                 resource_buffer_section.append("format = DXGI_FORMAT_R8_UINT")
-                resource_buffer_section.append("stride = 1")
+                # resource_buffer_section.append("stride = 1")
                 resource_buffer_section.append("filename = Buffer/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
                 resource_buffer_section.new_line()
         
-        print("BLENDREMAP: " + str(draw_ib_model.blend_remap))
+        # print("BLENDREMAP: " + str(draw_ib_model.blend_remap))
         if draw_ib_model.blend_remap:
-            print("生成BlendRemap相关Buffer：" + draw_ib_model.draw_ib)
+            # print("生成BlendRemap相关Buffer:" + draw_ib_model.draw_ib)
             # BlendRemap相关的Buffer
             resource_buffer_section.append("[ResourceBlendRemapVertexVGBuffer]")
             resource_buffer_section.append("type = Buffer")
@@ -651,8 +650,6 @@ class ModModelWWMI:
             resource_buffer_section.append("format = DXGI_FORMAT_R16_UINT")
             resource_buffer_section.append("filename = Buffer/" + draw_ib_model.draw_ib + "-" + "BlendRemapReverse.buf")
             resource_buffer_section.new_line()
-
-
 
 
         # ShapeKeyBuffer
@@ -704,7 +701,7 @@ class ModModelWWMI:
             self.add_texture_override_component(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             self.add_texture_override_shapekeys(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             self.add_resource_shapekeys(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
-            
+
             if Properties_WWMI.import_merged_vgmap():
                 self.add_resource_merged_skeleton(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
 

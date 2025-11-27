@@ -129,11 +129,8 @@ class DrawIBModelWWMI:
         obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11GameType, obj_name=self.merged_object.object.name)
 
         # 如果使用了remap技术则替换Remap
-        if getattr(self, 'blend_remap_maps', None):
+        if self.blend_remap:
             self.replace_remapped_blendindices(obj_element_model)
-            self.blend_remap = True
-        else:
-            print("No blend_remap_maps found, skipping BLENDINDICES remap.")
 
         # 上面替换完了remap这里才填充为最终的ndarray
         obj_element_model.fill_into_element_vertex_ndarray()
@@ -141,9 +138,9 @@ class DrawIBModelWWMI:
         # 然后才能创建ObjBufferModelWWMI
         self.obj_buffer_model_wwmi = ObjBufferModelWWMI(obj_element_model=obj_element_model)
 
-        # 写出原始未经任何改动的BLENDINDICES到BlendRemapVertexVG.buf, 格式为uint16_t
-        index_vertex_id_dict = self.obj_buffer_model_wwmi.index_vertex_id_dict
-        if index_vertex_id_dict is not None:
+        if self.blend_remap:
+            # 写出原始未经任何改动的BLENDINDICES到BlendRemapVertexVG.buf, 格式为uint16_t
+            index_vertex_id_dict = self.obj_buffer_model_wwmi.index_vertex_id_dict
             # 获取真实的VG通道数量
             num_vgs = self.d3d11GameType.get_blendindices_count_wwmi()
 
@@ -198,6 +195,8 @@ class DrawIBModelWWMI:
         # Per-component boolean indicating whether remap was used for that component
         remap_used: dict[str, bool] = {}
 
+        any_overflow = False
+
         for comp_obj in components_objs:
             # Ensure we have the evaluated mesh/obj available
             obj = comp_obj
@@ -220,12 +219,15 @@ class DrawIBModelWWMI:
                             used_vg_set.add(int(gidx))
 
             # Determine whether remapping is needed for this component
-            if len(used_vg_set) == 0 or (max(used_vg_set) if len(used_vg_set) else 0) < 256:
+            max_used = (max(used_vg_set) if len(used_vg_set) else 0)
+            if len(used_vg_set) == 0 or max_used < 256:
                 # No remapping required for this component
                 remapped_vgs_counts.append(0)
                 remap_maps[comp_obj.name] = { 'forward': [], 'reverse': {} }
                 remap_used[comp_obj.name] = False
                 continue
+            else:
+                any_overflow = True
 
             # Create forward and reverse remap arrays (512 entries each, uint16)
             obj_vg_ids = numpy.array(sorted(used_vg_set), dtype=numpy.uint16)
@@ -258,6 +260,10 @@ class DrawIBModelWWMI:
         self.blend_remap_maps = remap_maps
         # also expose which components actually used remapping
         self.blend_remap_used = remap_used
+
+        # If any component used VG ids >= 256, enable global blend_remap
+        if any_overflow:
+            self.blend_remap = True
 
  
 
