@@ -4,9 +4,9 @@
 from .ui.panel_ui import * 
 from .ui.panel_model_ui import *
 from .ui.collection_rightclick_ui import *
-from .ui.migoto_sword_ui import *
+from .ui.ui_sword import *
 from .ui.export_ui import SSMTGenerateMod, PanelGenerateModConfig, SSMTSelectGenerateModFolder
-from .ui.import_ui import Import3DMigotoRaw, SSMTImportAllFromCurrentWorkSpaceV3, PanelModelImportConfig
+from .ui.ui_import import Import3DMigotoRaw, SSMTImportAllFromCurrentWorkSpaceV3, PanelModelImportConfig
 from .ui.fast_texture_ui import *
 
 # 自动更新功能
@@ -28,8 +28,8 @@ from .config.plugin_config import PluginConfig
 bl_info = {
     "name": "TheHerta3",
     "description": "SSMT3.0 Series's Blender Plugin.",
-    "blender": (5, 1, 0),
-    "version": (3, 1, 0),
+    "blender": (4, 5, 0),
+    "version": (3, 1, 1),
     "location": "View3D",
     "category": "Generic"
 }
@@ -168,7 +168,7 @@ register_classes = (
 
     SSMTSelectGenerateModFolder,
 
-    Sword_UL_FastImportTextureList,
+    SWORD_UL_FastImportTextureList,
     Sword_ImportTexture_ImageListItem,
     Sword_ImportTexture_VIEW3D_PT_ImageMaterialPanel,
     Sword_ImportTexture_WM_OT_ApplyImageToMaterial,

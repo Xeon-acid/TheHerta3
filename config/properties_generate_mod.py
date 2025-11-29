@@ -18,7 +18,7 @@ class Properties_GenerateMod(bpy.types.PropertyGroup):
     zzz_use_slot_fix: bpy.props.BoolProperty(
         name="槽位风格贴图使用SlotFix技术",
         description="仅适用于槽位风格贴图，勾选后，特定名称标记的贴图将使用SlotFix风格，能一定程度上解决槽位风格贴图跨槽位的问题，跨Pixel槽位指的是在前一个DrawCall中是ps-t3但是下一个DrawCall变为ps-t5这种情况，但由于负责维护的人也在偷懒所以并不可靠",
-        default=False
+        default=True
     ) # type: ignore
 
 
@@ -31,8 +31,8 @@ class Properties_GenerateMod(bpy.types.PropertyGroup):
     
     gimi_use_orfix: bpy.props.BoolProperty(
         name="槽位风格贴图使用ORFix",
-        description="在使用槽位风格贴图标记时，如果偷懒不想在版本更新时维护由于贴图槽位变化导致的贴图损坏问题，可以勾选此选项将问题交给ORFix维护者来解决，仅GIMI可用",
-        default=False
+        description="勾选后，在使用槽位风格贴图标记时，如果偷懒不想手动维护由于贴图槽位变化导致的贴图损坏问题，可以勾选此选项将问题交给ORFix维护者来解决，仅GIMI可用\n注意，如果你不懂ORFix和NNFix的原理，请不要取消勾选，取消勾选会严格按照贴图标记来执行贴图部分ini生成，默认你会在ini中自行写判断语句修复来替代实现ORFix和NNFix的功能",
+        default=True
     ) # type: ignore
 
     @classmethod

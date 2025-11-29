@@ -5,38 +5,25 @@ from ..utils.obj_utils import ObjUtils
 from ..utils.log_utils import LOG
 from ..utils.collection_utils import CollectionUtils, CollectionColor
 from ..utils.config_utils import ConfigUtils
-
-from ..common.migoto_format import M_Key, ObjDataModel, M_Condition, D3D11GameType
 from ..utils.tips_utils import TipUtils
 
+from ..base.m_key import M_Key
+from ..base.m_condition import M_Condition
+from ..base.d3d11_gametype import D3D11GameType
+from ..base.obj_data_model import ObjDataModel
+from ..base.m_global_key_counter import M_GlobalKeyCounter
 
-from .obj_buffer_model import ObjBufferModel
+from .obj_element_model import ObjElementModel
+from .obj_buffer_model_unity import ObjBufferModelUnity
 
 
-
-class M_GlobalKeyCounter:
-    '''
-    在新版的生成Mod架构中用于统计一个Mod中全局的按键索引
-    以及当前生成Mod的数量，每个DrawIB都是一个Mod。
-    使用全局变量来避免过于复杂的变量传递。
-    '''
-
-    global_key_index:int = 0
-    generated_mod_number:int = 0
-
-    @classmethod
-    def initialize(cls):        
-        cls.global_key_index = 0
-        cls.generated_mod_number = 0
-
-'''
-分支模型
-
-也就是我们的基于集合嵌套的按键开关与按键切换架构。
-分支按键使用此模型进行全局统计，不再以每个DrawIB为单位。
-'''
 class BranchModel:
+    '''
+    分支模型
 
+    也就是我们的基于集合嵌套的按键开关与按键切换架构。
+    分支按键使用此模型进行全局统计,不再以每个DrawIB为单位,而是整体多IB的分支模型。
+    '''
     def __init__(self,workspace_collection:bpy.types.Collection):
         # 初始化基础属性
         self.keyname_mkey_dict:dict[str,M_Key] = {} # 全局按键名称和按键属性字典
@@ -200,7 +187,7 @@ class BranchModel:
         # 处理obj
         for obj in current_collection.objects:
             '''
-            每个obj都必须添加条件，可是怎么样能知道当前条件是怎样的呢
+            每个obj都必须添加条件,可是怎么样能知道当前条件是怎样的呢
             '''
             if obj.type == 'MESH' and obj.hide_get() == False:
                 
@@ -219,7 +206,7 @@ class BranchModel:
         '''
         只返回指定draw_ib的obj列表
         这个方法存在的目的是为了兼容鸣潮的MergedObj
-        这里只是根据IB获取一下对应的obj列表，不需要额外计算其它东西，因为WWMI的逻辑是融合后计算。
+        这里只是根据IB获取一下对应的obj列表,不需要额外计算其它东西,因为WWMI的逻辑是融合后计算。
         '''
     
         final_ordered_draw_obj_model_list:list[ObjDataModel] = [] 
@@ -238,6 +225,7 @@ class BranchModel:
     def get_buffered_obj_data_model_list_by_draw_ib_and_game_type(self,draw_ib:str,d3d11_game_type:D3D11GameType):
         # print("BranchModel.get_buffered_obj_data_model_list_by_draw_ib_and_game_type()")
         '''
+        调用这个方法的时候才转换Buffer，不调用的话不转换
         (1) 读取obj的category_buffer
         (2) 读取obj的ib
         (3) 设置到最终的ordered_draw_obj_model_list
@@ -273,8 +261,10 @@ class BranchModel:
                         ObjUtils.normalize_all(obj)
 
                 # print("DrawIB BranchModel")
-                obj_buffer_model = ObjBufferModel(d3d11_game_type=d3d11_game_type,obj_name=obj_name)
-
+                obj_element_model = ObjElementModel(d3d11_game_type=d3d11_game_type,obj_name=obj_name)
+                obj_element_model.fill_into_element_vertex_ndarray()
+                
+                obj_buffer_model = ObjBufferModelUnity(obj_element_model=obj_element_model)
                 # print(len(category_buffer_dict["Blend"]))
                 # print(len(index_vertex_id_dict))
                 

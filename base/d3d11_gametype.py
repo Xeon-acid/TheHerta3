@@ -7,121 +7,7 @@ import os
 
 from dataclasses import dataclass, field
 from typing import Dict
-
-
-@dataclass
-class D3D11Element:
-    SemanticName:str
-    SemanticIndex:int
-    Format:str
-    ByteWidth:int
-    # Which type of slot and slot number it use? eg:vb0
-    ExtractSlot:str
-    # Is it from pointlist or trianglelist or compute shader?
-    ExtractTechnique:str
-    # Human named category, also will be the buf file name suffix.
-    Category:str
-
-    # Fixed items
-    InputSlot:str = field(default="0", init=False, repr=False)
-    InputSlotClass:str = field(default="per-vertex", init=False, repr=False)
-    InstanceDataStepRate:str = field(default="0", init=False, repr=False)
-
-    # Generated Items
-    ElementNumber:int = field(init=False,default=0)
-    AlignedByteOffset:int
-    ElementName:str = field(init=False,default="")
-
-    def __post_init__(self):
-        self.ElementName = self.get_indexed_semantic_name()
-
-    def get_indexed_semantic_name(self)->str:
-        if self.SemanticIndex == 0:
-            return self.SemanticName
-        else:
-            return self.SemanticName + str(self.SemanticIndex)
-
-
-
-class M_DrawIndexed:
-    def __init__(self) -> None:
-        self.DrawNumber = ""
-
-        # 绘制起始位置
-        self.DrawOffsetIndex = "" 
-
-        self.DrawStartIndex = "0"
-
-        # 代表一个obj具体的draw_indexed
-        self.AliasName = "" 
-
-        # 代表这个obj的顶点数
-        self.UniqueVertexCount = 0 
-    
-    def get_draw_str(self) ->str:
-        return "drawindexed = " + self.DrawNumber + "," + self.DrawOffsetIndex +  "," + self.DrawStartIndex
-
-class M_Key:
-    '''
-    key_name 声明的key名称，一般按照声明顺序为$swapkey + 数字
-    key_value 具体的按键VK值
-    '''
-
-    def __init__(self):
-        self.key_name = ""
-        self.key_value = ""
-        self.value_list:list[int] = []
-        
-        self.initialize_value = 0
-        self.initialize_vk_str = "" # 虚拟按键组合，遵循3Dmigoto的解析格式
-
-        # 用于chain_key_list中传递使用，
-        self.tmp_value = 0
-
-    def __str__(self):
-        return (f"M_Key(key_name='{self.key_name}', key_value='{self.key_value}', "
-                f"value_list={self.value_list}, initialize_value={self.initialize_value}, "
-                f"tmp_value={self.tmp_value})")
-    
-
-class M_Condition:
-    def __init__(self,work_key_list:list[M_Key] = []):
-        self.work_key_list = work_key_list
-
-        # 计算出生效的ConditionStr
-        condition_str = ""
-        if len(self.work_key_list) != 0:
-            for work_key in self.work_key_list:
-                single_condition:str = work_key.key_name + " == " + str(work_key.tmp_value)
-                condition_str = condition_str + single_condition + " && "
-            # 移除结尾的最后四个字符 " && "
-            condition_str = condition_str[:-4] 
-        
-        self.condition_str = condition_str
-
-
-class ObjDataModel:
-    def __init__(self,obj_name:str):
-        self.obj_name = obj_name
-        
-        # 因为现在的obj都需要遵守命名规则
-        print(self.obj_name)
-        obj_name_split = self.obj_name.split("-")
-        self.draw_ib = obj_name_split[0]
-
-        # TODO 这里以后要改进去掉，统一规范
-        # 鸣潮生成的临时obj不会遵循命名规范，这里的值也不需要设置
-        # 这里是旧代码的遗留问题，暂时只添加个兼容处理即可。
-        if "-" in self.obj_name:
-            self.component_count = int(obj_name_split[1])
-            self.obj_alias_name = obj_name_split[2]
-
-        # 其它属性
-        self.ib = []
-        self.category_buffer_dict = {}
-        self.index_vertex_id_dict = {} # 仅用于WWMI的索引顶点ID字典，key是顶点索引，value是顶点ID，默认可以为None
-        self.condition:M_Condition = M_Condition()
-        self.drawindexed_obj:M_DrawIndexed = M_DrawIndexed()
+from ..base.d3d11_element import D3D11Element
 
 
 # Designed to read from json file for game type config
@@ -209,5 +95,29 @@ class D3D11GameType:
         for categoryname,category_stride in self.CategoryStrideDict.items():
             new_dict[categoryname] = category_stride
         return new_dict
+
+    def get_blendindices_count_wwmi(self) -> int:
+        """
+        Nico:注意这个方法是给WWMI准备的,其它逻辑不兼容此方法,也不需要用到此方法
+        Return the number of blend indices (VG channels) used by the game type.
+
+        Historically code used a pattern like::
+            num_vgs = 4
+            if blendindices_element.Format == "R8_UINT":
+                num_vgs = blendindices_element.ByteWidth
+
+        This helper centralizes that logic. If the BLENDINDICES element is not
+        present, or the format is not R8_UINT, default to 4.
+        """
+        elem = self.ElementNameD3D11ElementDict.get("BLENDINDICES", None)
+        if elem is None:
+            return 4
+        try:
+            if getattr(elem, 'Format', None) == "R8_UINT":
+                bw = int(getattr(elem, 'ByteWidth', 0))
+                return bw if bw > 0 else 4
+        except Exception:
+            pass
+        return 4
 
   

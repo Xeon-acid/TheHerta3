@@ -2,27 +2,22 @@ import numpy
 import struct
 import copy
 
-from ..common.migoto_format import *
 
 from ..utils.config_utils import ConfigUtils
 from ..utils.collection_utils import *
-from ..config.main_config import *
 from ..utils.json_utils import *
 from ..utils.timer_utils import *
-from ..common.migoto_format import M_DrawIndexed,ObjDataModel
+
+from ..base.obj_data_model import ObjDataModel
+from ..base.component_model import ComponentModel
+from ..base.d3d11_gametype import D3D11GameType
+from ..base.m_draw_indexed import M_DrawIndexed
+
+from ..config.main_config import *
 from ..config.import_config import ImportConfig
 
 from .branch_model import BranchModel
-
-class ComponentModel:
-    '''
-    一个小数据结构，用来更方便的表示数据之间的关系，用于传递数据
-    '''
-    def __init__(self):
-        self.component_name = ""
-        self.final_ordered_draw_obj_model_list = []
-        pass
-
+from .obj_writer import ObjWriter
 
 class DrawIBModel:
     '''
@@ -49,7 +44,7 @@ class DrawIBModel:
         在这一步之前，需要对当前DrawIB的所有的obj_data_model填充ib和category_buf_dict属性
         '''
         self.draw_ib_ordered_obj_data_model_list:list[ObjDataModel] = branch_model.get_buffered_obj_data_model_list_by_draw_ib_and_game_type(draw_ib=draw_ib,d3d11_game_type=self.import_config.d3d11GameType)
-        self.component_model_list:list[ComponentModel] = []
+        self._component_model_list:list[ComponentModel] = []
         self.component_name_component_model_dict:dict[str,ComponentModel] = {}
         for part_name in self.import_config.part_name_list:
             print("part_name: " + part_name)
@@ -59,10 +54,9 @@ class DrawIBModel:
                     component_obj_data_model_list.append(obj_data_model)
                     # print(part_name + " 已赋值")
 
-            component_model = ComponentModel()
-            component_model.component_name = "Component " +part_name
-            component_model.final_ordered_draw_obj_model_list = component_obj_data_model_list
-            self.component_model_list.append(component_model)
+            component_model = ComponentModel(component_name="Component " +part_name, final_ordered_draw_obj_model_list=component_obj_data_model_list)
+     
+            self._component_model_list.append(component_model)
             self.component_name_component_model_dict[component_model.component_name] = component_model
         
         LOG.newline()
@@ -92,7 +86,7 @@ class DrawIBModel:
     def parse_categoryname_bytelist_dict_3(self):
         processed_obj_name_list = [] # 用于记录已经处理过的obj_name，避免重复处理
 
-        for component_model in self.component_model_list:
+        for component_model in self._component_model_list:
             for obj_model in component_model.final_ordered_draw_obj_model_list:
                 obj_name = obj_model.obj_name
                 # 如果obj_name已经被处理过了，则跳过
@@ -150,7 +144,7 @@ class DrawIBModel:
         draw_offset = 0
 
         new_component_model_list = []
-        for component_model in self.component_model_list:
+        for component_model in self._component_model_list:
             new_final_ordered_draw_obj_model_list:list[ObjDataModel] = [] 
 
             for obj_model in component_model.final_ordered_draw_obj_model_list:
@@ -204,7 +198,7 @@ class DrawIBModel:
         # 累加完毕后draw_offset的值就是总的index_count的值，正好作为WWMI的$object_id
         self.total_index_count = draw_offset
 
-        for component_model in self.component_model_list:
+        for component_model in self._component_model_list:
             # Only export if it's not empty.
             if len(ib_buf) != 0:
                 self.componentname_ibbuf_dict[component_model.component_name] = ib_buf
@@ -218,7 +212,7 @@ class DrawIBModel:
         obj_name_drawindexedobj_cache_dict:dict[str,M_DrawIndexed] = {}
 
         new_component_model_list = []
-        for component_model in self.component_model_list:
+        for component_model in self._component_model_list:
             ib_buf = []
             offset = 0
 
@@ -284,7 +278,7 @@ class DrawIBModel:
             else:
                 self.componentname_ibbuf_dict[component_model.component_name] = ib_buf
 
-        self.component_model_list = new_component_model_list
+        self._component_model_list = new_component_model_list
 
         self.total_index_count = total_offset
 
@@ -316,7 +310,7 @@ class DrawIBModel:
                 print("Export Skip, Can't get ib buf for partname: " + partname)
             else:
                 buf_filename = self.PartName_IBBufferFileName_Dict[partname]
-                ModExportUtils.write_vertex_index_list_to_file_r32uint(ib_buf,buf_filename)
+                ObjWriter.write_buf_ib_r32_uint(ib_buf,buf_filename)
                 
         # print("Export Category Buffers::")
         # Export category buffer files.
@@ -331,21 +325,3 @@ class DrawIBModel:
 
 
 
-class ModExportUtils:
-    '''
-    这个类专门用在生成Mod时调用
-    我们规定生成的Mod文件夹结构如下：
-
-    文件夹: Mod_工作空间名称
-    - 文件夹: Buffer                    存放所有二进制缓冲区文件，包括IB和VB文件
-    - 文件夹: Texture                   存放所有贴图文件
-    - 文件:   工作空间名称.ini           所有ini内容要全部写在一起，如果写在多个ini里面通过namespace关联，则可能会导致Mod开启或关闭时有一瞬间的上贴图延迟
-    '''
-
-    @staticmethod
-    def write_vertex_index_list_to_file_r32uint(index_list:list[int],buf_file_name:str):
-        ib_path = os.path.join(GlobalConfig.path_generatemod_buffer_folder(), buf_file_name)
-        packed_data = struct.pack(f'<{len(index_list)}I', *index_list)
-        with open(ib_path, 'wb') as ibf:
-            ibf.write(packed_data) 
-    

@@ -1,14 +1,14 @@
 import bpy
 import math
 
-from ..common.migoto_format import M_Key, M_DrawIndexed, M_Condition,D3D11GameType
+
 from ..config.import_config import GlobalConfig
 from ..common.draw_ib_model_wwmi import DrawIBModelWWMI
 
 from ..common.branch_model import BranchModel,M_GlobalKeyCounter
 from ..common.m_ini_builder import M_IniBuilder,M_IniSection,M_SectionType
 from ..config.properties_generate_mod import Properties_GenerateMod
-from ..common.m_ini_helper import M_IniHelperV2,M_IniHelperV3
+from ..common.m_ini_helper import M_IniHelper,M_IniHelper
 from ..common.m_ini_helper_gui import M_IniHelperGUI
 from ..config.properties_wwmi import Properties_WWMI
 
@@ -36,7 +36,7 @@ class ModModelWWMI:
     def add_constants_section(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
         constants_section = M_IniSection(M_SectionType.Constants)
         constants_section.append("[Constants]")
-        constants_section.append("global $required_wwmi_version = 0.70")
+        constants_section.append("global $required_wwmi_version = 0.91")
 
         # object_guid值为原模型的总的index_count 在metadata.json中有记录
         constants_section.append("global $object_guid = " + str(draw_ib_model.extracted_object.index_count))
@@ -45,7 +45,7 @@ class ModModelWWMI:
 
         # 哦，总算搞明白了，WWMI的代码中的注释也有问题，它说的Number of shapekeyed vertices in custom model原来不是字面意思，而是指的是shapekey_vertex_id的数量。
         # 因为这玩意是用来改变Shapekey的UAV的大小的
-        constants_section.append("global $shapekey_vertex_count = " + str(len(draw_ib_model.shapekey_vertex_ids)))
+        constants_section.append("global $shapekey_vertex_count = " + str(len(draw_ib_model.obj_buffer_model_wwmi.shapekey_vertex_ids)))
 
         # WWMI中每个mod的mod_id都是-1000，暂时不知道是为了什么，难道是保留设计？不管了，为保证兼容性，暂时先留着
         constants_section.append("global $mod_id = -1000")
@@ -72,6 +72,10 @@ class ModModelWWMI:
 
         # 只有Merged顶点组需要运行UpdateMergedSkeleton
         if Properties_WWMI.import_merged_vgmap():
+
+            if draw_ib_model.blend_remap:
+                present_section.append("    run = CommandListInitializeBlendRemaps")
+
             present_section.append("    run = CommandListUpdateMergedSkeleton")
 
         present_section.append("  else")
@@ -103,6 +107,120 @@ class ModModelWWMI:
         commandlist_section.new_line()
 
         ini_builder.append_section(commandlist_section)
+
+    def add_commandlist_update_merged_skeleton(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
+        commandlist_section = M_IniSection(M_SectionType.CommandList)
+
+        if Properties_WWMI.import_merged_vgmap():
+            # CommandListUpdateMergedSkeleton
+            commandlist_section.append("[CommandListUpdateMergedSkeleton]")
+            commandlist_section.append("if $state_id")
+            commandlist_section.append("  $state_id = 0")
+            commandlist_section.append("else")
+            commandlist_section.append("  $state_id = 1")
+            commandlist_section.append("endif")
+            commandlist_section.append("ResourceMergedSkeleton = copy ResourceMergedSkeletonRW")
+            commandlist_section.append("ResourceExtraMergedSkeleton = copy ResourceExtraMergedSkeletonRW")
+
+            if draw_ib_model.blend_remap:
+                commandlist_section.append("run = CommandListRemapMergedSkeleton")
+            commandlist_section.new_line()
+        
+        ini_builder.append_section(commandlist_section)
+
+    def add_blend_remap_sections(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
+        blend_remap_section = M_IniSection(M_SectionType.CommandList)
+
+        if Properties_WWMI.import_merged_vgmap():
+            # CommandListUpdateMergedSkeleton
+            blend_remap_section.append("[ResourceMergedSkeletonRemap]")
+            blend_remap_section.append("[ResourceExtraMergedSkeletonRemap]")
+            blend_remap_section.new_line()
+
+            blend_remap_section.append("[ResourceBlendBufferOverride]")
+            blend_remap_section.append("[ResourceExtraMergedSkeletonOverride]")
+            blend_remap_section.append("[ResourceMergedSkeletonOverride]")
+            blend_remap_section.new_line()
+
+            blend_remap_section.append("[ResourceRemappedBlendBufferRW]")
+            blend_remap_section.append("[ResourceRemappedSkeletonRW]")
+            blend_remap_section.append("[ResourceExtraRemappedSkeletonRW]")
+            blend_remap_section.new_line()
+
+            for component_tmp_obj_name, use_remap in draw_ib_model.blend_remap_used.items():
+                if use_remap:
+                    print(component_tmp_obj_name)
+                    component_count = int(component_tmp_obj_name.split("-")[1]) - 1
+                    blend_remap_section.append("[ResourceRemappedBlendBufferComponent" + str(component_count) + "]")
+                    blend_remap_section.append("[ResourceRemappedSkeletonComponent" + str(component_count) + "]")
+                    blend_remap_section.append("[ResourceExtraRemappedSkeletonComponent" + str(component_count) + "]")
+                    blend_remap_section.new_line()
+
+            if draw_ib_model.blend_remap:
+                blend_remap_section.append("[CommandListInitializeBlendRemaps]")
+                blend_remap_section.append("local $blend_remaps_initialized")
+                blend_remap_section.append("if !$blend_remaps_initialized")
+                blend_remap_section.append("  ResourceRemappedSkeletonRW = copy ResourceMergedSkeletonRW")
+                blend_remap_section.append("  ResourceExtraRemappedSkeletonRW = copy ResourceExtraMergedSkeletonRW")
+                blend_remap_section.new_line()
+                blend_remap_section.append("  $\\WWMIv1\\custom_vertex_count = $mesh_vertex_count")
+                blend_remap_section.append("  $\\WWMIv1\\weights_per_vertex_count = 8") # TODO 这里后续要改成动态获取
+                blend_remap_section.append("  cs-t34 = ref ResourceBlendRemapReverseBuffer")
+                blend_remap_section.append("  cs-t35 = ref ResourceBlendRemapVertexVGBuffer")
+
+                blend_remap_id = 0
+                for component_tmp_obj_name, use_remap in draw_ib_model.blend_remap_used.items():
+                    if use_remap:
+                        component_count = int(component_tmp_obj_name.split("-")[1]) - 1
+                        component_count_str = str(component_count)
+                        blend_remap_section.append("    $\\WWMIv1\\blend_remap_id = " + str(blend_remap_id))
+                        blend_remap_section.append("    ResourceRemappedBlendBufferRW = copy ResourceBlendBufferNoStride")
+                        blend_remap_section.append("    cs-u4 = ref ResourceRemappedBlendBufferRW")
+                        blend_remap_section.append("    run = CustomShader\\WWMIv1\\BlendRemapper")
+                        blend_remap_section.append("    ResourceRemappedBlendBufferComponent" + component_count_str + " = copy ResourceRemappedBlendBufferRW")
+                        blend_remap_section.append("    ResourceRemappedBlendBufferComponent" + component_count_str + " = copy_desc ResourceBlendBuffer")
+                        blend_remap_section.new_line()
+
+                        blend_remap_id = blend_remap_id + 1
+
+                blend_remap_section.append("    $blend_remaps_initialized = 1")
+                blend_remap_section.append("endif")
+                blend_remap_section.new_line()
+
+            blend_remap_section.append("[CommandListRemapMergedSkeleton]")
+            blend_remap_section.append("ResourceMergedSkeletonRemap = copy ResourceMergedSkeletonRW")
+            blend_remap_section.append("ResourceExtraMergedSkeletonRemap = copy ResourceExtraMergedSkeletonRW")
+            blend_remap_section.new_line()
+            if draw_ib_model.blend_remap:
+                blend_remap_section.append("cs-t37 = ResourceBlendRemapForwardBuffer")
+                blend_remap_section.new_line()
+
+
+                blend_remap_id = 0
+                for component_tmp_obj_name, use_remap in draw_ib_model.blend_remap_used.items():
+                    if not use_remap:
+                        continue
+
+                    blend_remap_section.append("$\\WWMIv1\\blend_remap_id = " + str(blend_remap_id))
+
+                    component_count = int(component_tmp_obj_name.split("-")[1]) - 1
+                    vg_count = draw_ib_model.extracted_object.components[component_count].vg_count
+                    # 从 extracted_object 中读取预先记录的 vg_count（此处代表该 component 总的 VG 数量）
+                    blend_remap_section.append("$\\WWMIv1\\vg_count = " + str(vg_count))
+                    blend_remap_section.append("cs-t38 = ResourceMergedSkeletonRemap")
+                    blend_remap_section.append("cs-u5 = ResourceRemappedSkeletonRW")
+                    blend_remap_section.append("run = CustomShader\\WWMIv1\\SkeletonRemapper")
+                    blend_remap_section.append("ResourceRemappedSkeletonComponent" + str(component_count) +" = copy ResourceRemappedSkeletonRW")
+                    blend_remap_section.append("cs-t38 = ResourceExtraMergedSkeletonRemap")
+                    blend_remap_section.append("cs-u5 = ResourceExtraRemappedSkeletonRW")
+                    blend_remap_section.append("run = CustomShader\\WWMIv1\\SkeletonRemapper")
+                    blend_remap_section.append("ResourceExtraRemappedSkeletonComponent" + str(component_count) +" = copy ResourceExtraRemappedSkeletonRW")
+                    blend_remap_section.new_line()
+
+                    blend_remap_id = blend_remap_id + 1
+        
+        ini_builder.append_section(blend_remap_section)
+
 
     def add_commandlist_trigger_shared_cleanup_section(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
         commandlist_section = M_IniSection(M_SectionType.CommandList)
@@ -138,15 +256,41 @@ class ModModelWWMI:
         commandlist_section.append("vb1 = ResourceVectorBuffer")
         commandlist_section.append("vb2 = ResourceTexcoordBuffer")
         commandlist_section.append("vb3 = ResourceColorBuffer")
-        commandlist_section.append("vb4 = ResourceBlendBuffer")
+
+        if not draw_ib_model.blend_remap:
+            commandlist_section.append("vb4 = ResourceBlendBuffer")
 
         if Properties_WWMI.import_merged_vgmap():
-            commandlist_section.append("if vs-cb3 == 3381.7777")
-            commandlist_section.append("  vs-cb3 = ResourceExtraMergedSkeleton")
-            commandlist_section.append("endif")
-            commandlist_section.append("if vs-cb4 == 3381.7777")
-            commandlist_section.append("  vs-cb4 = ResourceMergedSkeleton")
-            commandlist_section.append("endif")
+            if draw_ib_model.blend_remap:
+                commandlist_section.append("if ResourceBlendBufferOverride === null")
+                commandlist_section.append("vb4 = ResourceBlendBuffer")
+                commandlist_section.append("if vs-cb3 == 3381.7777")
+                commandlist_section.append("  vs-cb3 = ResourceExtraMergedSkeleton")
+                commandlist_section.append("endif")
+                commandlist_section.append("if vs-cb4 == 3381.7777")
+                commandlist_section.append("  vs-cb4 = ResourceMergedSkeleton")
+                commandlist_section.append("endif")
+
+                commandlist_section.append("else")
+
+                commandlist_section.append("vb4 = ref ResourceBlendBufferOverride")
+                commandlist_section.append("if vs-cb3 == 3381.7777")
+                commandlist_section.append("  vs-cb3 = ResourceExtraMergedSkeletonOverride")
+                commandlist_section.append("endif")
+                commandlist_section.append("if vs-cb4 == 3381.7777")
+                commandlist_section.append("  vs-cb4 = ResourceMergedSkeletonOverride")
+                commandlist_section.append("  endif")
+
+                commandlist_section.append("endif")
+
+
+            else:
+                commandlist_section.append("if vs-cb3 == 3381.7777")
+                commandlist_section.append("  vs-cb3 = ResourceExtraMergedSkeleton")
+                commandlist_section.append("endif")
+                commandlist_section.append("if vs-cb4 == 3381.7777")
+                commandlist_section.append("  vs-cb4 = ResourceMergedSkeleton")
+                commandlist_section.append("endif")
 
         commandlist_section.new_line()
 
@@ -154,29 +298,26 @@ class ModModelWWMI:
         # TODO 后续要搞清楚使用槽位恢复技术的原因是什么，以及测试0.62中不使用槽位恢复的缺点，以及0.70之后版本中使用槽位恢复的意义
         commandlist_section.append("[CommandListCleanupSharedResources]")
         commandlist_section.append("vb0 = ref ResourceBypassVB0")
+
+        if draw_ib_model.blend_remap:
+            commandlist_section.append("if ResourceBlendBufferOverride !== null")
+            commandlist_section.append("    ResourceBlendBufferOverride = null")
+            commandlist_section.append("    ResourceMergedSkeletonOverride = null")
+            commandlist_section.append("    ResourceExtraMergedSkeletonOverride = null")
+            commandlist_section.append("endif")
+
         commandlist_section.new_line()
 
         ini_builder.append_section(commandlist_section)
-
-
-    def add_commandlist_section(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
+    
+    def add_commandlist_merge_skeleton_section(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
         commandlist_section = M_IniSection(M_SectionType.CommandList)
 
         if Properties_WWMI.import_merged_vgmap():
-        # CommandListUpdateMergedSkeleton
-            commandlist_section.append("[CommandListUpdateMergedSkeleton]")
-            commandlist_section.append("if $state_id")
-            commandlist_section.append("  $state_id = 0")
-            commandlist_section.append("else")
-            commandlist_section.append("  $state_id = 1")
-            commandlist_section.append("endif")
-            commandlist_section.append("ResourceMergedSkeleton = copy ResourceMergedSkeletonRW")
-            commandlist_section.append("ResourceExtraMergedSkeleton = copy ResourceExtraMergedSkeletonRW")
-            commandlist_section.new_line()
 
             # CommandListMergeSkeleton
             commandlist_section.append("[CommandListMergeSkeleton]")
-            commandlist_section.append("$\\WWMIv1\\custom_mesh_scale = 1.0")
+            commandlist_section.append("$\\WWMIv1\\custom_mesh_scale = 1.00")
             commandlist_section.append("cs-cb8 = ref vs-cb4")
             commandlist_section.append("cs-u6 = ResourceMergedSkeletonRW")
             commandlist_section.append("run = CustomShader\\WWMIv1\\SkeletonMerger")
@@ -185,34 +326,9 @@ class ModModelWWMI:
             commandlist_section.append("run = CustomShader\\WWMIv1\\SkeletonMerger")
             commandlist_section.new_line()
 
-
-        # TODO ShapeKey的CommandList只有在ShapeKey存在时才加入，物体Mod不加入
-        # CommandListSetupShapeKeys
-        commandlist_section.append("[CommandListSetupShapeKeys]")
-        commandlist_section.append("$\\WWMIv1\\shapekey_checksum = " + str(draw_ib_model.extracted_object.shapekeys.checksum))
-        commandlist_section.append("cs-t33 = ResourceShapeKeyOffsetBuffer")
-        commandlist_section.append("cs-u5 = ResourceCustomShapeKeyValuesRW")
-        commandlist_section.append("cs-u6 = ResourceShapeKeyCBRW")
-        commandlist_section.append("run = CustomShader\\WWMIv1\\ShapeKeyOverrider")
-        commandlist_section.new_line()
-
-        # CommandListLoadShapeKeys
-        commandlist_section.append("[CommandListLoadShapeKeys]")
-        commandlist_section.append("$\\WWMIv1\\shapekey_vertex_count = $shapekey_vertex_count")
-        commandlist_section.append("cs-t0 = ResourceShapeKeyVertexIdBuffer")
-        commandlist_section.append("cs-t1 = ResourceShapeKeyVertexOffsetBuffer")
-        commandlist_section.append("cs-u6 = ResourceShapeKeyCBRW")
-        commandlist_section.append("run = CustomShader\\WWMIv1\\ShapeKeyLoader")
-        commandlist_section.new_line()
-
-        # CommandListMultiplyShapeKeys
-        commandlist_section.append("[CommandListMultiplyShapeKeys]")
-        commandlist_section.append("$\\WWMIv1\\custom_vertex_count = $mesh_vertex_count")
-        commandlist_section.append("run = CustomShader\\WWMIv1\\ShapeKeyMultiplier")
-        commandlist_section.new_line()
-
-
         ini_builder.append_section(commandlist_section)
+
+
 
     def add_resource_mod_info_section_default(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
         '''
@@ -266,7 +382,8 @@ class ModModelWWMI:
     def add_texture_override_component(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
         texture_override_component = M_IniSection(M_SectionType.TextureOverrideIB)
         component_count = 0
-        for merged_object_component in draw_ib_model.merged_object.components:
+
+        for component_tmp_obj_name, component_blend_remap_used in draw_ib_model.blend_remap_used.items():
             component_name = "Component " + str(component_count + 1)
             component_count_str = str(component_count)
             component_object = draw_ib_model.extracted_object.components[component_count]
@@ -294,13 +411,20 @@ class ModModelWWMI:
 
                 # 必须先判定这里是否有DrawIndexed才能去进行绘制以及调用CommandList
                 component_model = draw_ib_model.component_name_component_model_dict[component_name]
-                drawindexed_str_list = M_IniHelperV2.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
+                drawindexed_str_list = M_IniHelper.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
 
                 if len(drawindexed_str_list) != 0:
+                    if component_blend_remap_used:
+                        texture_override_component.append("    " + "ResourceBlendBufferOverride = ref ResourceRemappedBlendBufferComponent" + str(component_count))
+                        texture_override_component.append("    " + "ResourceMergedSkeletonOverride = ref ResourceRemappedSkeletonComponent" + str(component_count))
+                        texture_override_component.append("    " + "ResourceExtraMergedSkeletonOverride = ref ResourceExtraRemappedSkeletonComponent" + str(component_count))
+
+
                     texture_override_component.append("    " + "run = CommandListTriggerResourceOverrides")
                     texture_override_component.append("    " + "run = CommandListOverrideSharedResources")
-                    texture_override_component.append("    " + "; Draw Component " + component_count_str)
                     
+                    # 添加draw系列
+                    texture_override_component.append("    " + "; Draw Component " + component_count_str)
                     for drawindexed_str in drawindexed_str_list:
                         texture_override_component.append(drawindexed_str)
 
@@ -310,7 +434,7 @@ class ModModelWWMI:
 
                 # 必须先判定这里是否有DrawIndexed才能去进行绘制以及调用CommandList
                 component_model = draw_ib_model.component_name_component_model_dict[component_name]
-                drawindexed_str_list = M_IniHelperV2.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
+                drawindexed_str_list = M_IniHelper.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
                 if len(drawindexed_str_list) != 0:
                     texture_override_component.append("  " + "handling = skip")
                     texture_override_component.append("  " + "run = CommandListTriggerResourceOverrides")
@@ -349,6 +473,28 @@ class ModModelWWMI:
             texture_override_shapekeys_section.append("override_byte_stride = 4")
             texture_override_shapekeys_section.append("override_vertex_count = $mesh_vertex_count")
             texture_override_shapekeys_section.new_line()
+        
+        # TODO ShapeKey的CommandList只有在ShapeKey存在时才加入，物体Mod不加入
+        # CommandListSetupShapeKeys
+        texture_override_shapekeys_section.append("[CommandListSetupShapeKeys]")
+        texture_override_shapekeys_section.append("$\\WWMIv1\\shapekey_checksum = " + str(draw_ib_model.extracted_object.shapekeys.checksum))
+        texture_override_shapekeys_section.append("cs-t33 = ResourceShapeKeyOffsetBuffer")
+        texture_override_shapekeys_section.append("cs-u5 = ResourceCustomShapeKeyValuesRW")
+        texture_override_shapekeys_section.append("cs-u6 = ResourceShapeKeyCBRW")
+        texture_override_shapekeys_section.append("run = CustomShader\\WWMIv1\\ShapeKeyOverrider")
+        texture_override_shapekeys_section.new_line()
+
+        # CommandListLoadShapeKeys
+        texture_override_shapekeys_section.append("[CommandListLoadShapeKeys]")
+        texture_override_shapekeys_section.append("$\\WWMIv1\\shapekey_vertex_count = $shapekey_vertex_count")
+        texture_override_shapekeys_section.append("cs-t0 = ResourceShapeKeyVertexIdBuffer")
+        texture_override_shapekeys_section.append("cs-t1 = ResourceShapeKeyVertexOffsetBuffer")
+        texture_override_shapekeys_section.append("cs-u6 = ResourceShapeKeyCBRW")
+        texture_override_shapekeys_section.append("run = CustomShader\\WWMIv1\\ShapeKeyLoader")
+        texture_override_shapekeys_section.new_line()
+
+
+
 
         if shapekey_offsets_hash != "":
             texture_override_shapekeys_section.append("[TextureOverrideShapeKeyLoaderCallback]")
@@ -368,6 +514,12 @@ class ModModelWWMI:
 
             texture_override_shapekeys_section.append("endif")
             texture_override_shapekeys_section.new_line()
+
+        # CommandListMultiplyShapeKeys
+        texture_override_shapekeys_section.append("[CommandListMultiplyShapeKeys]")
+        texture_override_shapekeys_section.append("$\\WWMIv1\\custom_vertex_count = $mesh_vertex_count")
+        texture_override_shapekeys_section.append("run = CustomShader\\WWMIv1\\ShapeKeyMultiplier")
+        texture_override_shapekeys_section.new_line()
 
         if shapekey_offsets_hash != "":
             texture_override_shapekeys_section.append("[TextureOverrideShapeKeyMultiplierCallback]")
@@ -390,6 +542,7 @@ class ModModelWWMI:
 
     def add_resource_shapekeys(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
         resource_shapekeys_section = M_IniSection(M_SectionType.ResourceShapeKeysOverride)
+        resource_shapekeys_section.append("; Resources: Shape Keys Override -------------------------")
 
         # TODO 这些array后面的值可能是动态计算得到的
         resource_shapekeys_section.append("[ResourceShapeKeyCBRW]")
@@ -414,7 +567,11 @@ class ModModelWWMI:
         resource_skeleton_section.append("[ResourceMergedSkeletonRW]")
         resource_skeleton_section.append("type = RWBuffer")
         resource_skeleton_section.append("format = R32G32B32A32_FLOAT")
-        resource_skeleton_section.append("array = 768")
+
+        if draw_ib_model.d3d11GameType.get_blendindices_count_wwmi() == 4:
+            resource_skeleton_section.append("array = 768")
+        elif draw_ib_model.d3d11GameType.get_blendindices_count_wwmi() == 8:
+            resource_skeleton_section.append("array = 1536")
         resource_skeleton_section.new_line()
 
         resource_skeleton_section.append("[ResourceExtraMergedSkeleton]")
@@ -423,7 +580,11 @@ class ModModelWWMI:
         resource_skeleton_section.append("[ResourceExtraMergedSkeletonRW]")
         resource_skeleton_section.append("type = RWBuffer")
         resource_skeleton_section.append("format = R32G32B32A32_FLOAT")
-        resource_skeleton_section.append("array = 768")
+
+        if draw_ib_model.d3d11GameType.get_blendindices_count_wwmi() == 4:
+            resource_skeleton_section.append("array = 768")
+        elif draw_ib_model.d3d11GameType.get_blendindices_count_wwmi() == 8:
+            resource_skeleton_section.append("array = 1536")
 
         ini_builder.append_section(resource_skeleton_section)
 
@@ -458,6 +619,38 @@ class ModModelWWMI:
             resource_buffer_section.append("stride = " + str(category_stride))
             resource_buffer_section.append("filename = Buffer/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
             resource_buffer_section.new_line()
+
+            if category_name == "Blend" and draw_ib_model.blend_remap:
+                # 额外添加一个NoStride的BlendBuffer，用于BlendRemapper
+                resource_buffer_section.append("[ResourceBlendBufferNoStride]")
+                resource_buffer_section.append("type = Buffer")
+                resource_buffer_section.append("format = DXGI_FORMAT_R8_UINT")
+                # resource_buffer_section.append("stride = 1")
+                resource_buffer_section.append("filename = Buffer/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
+                resource_buffer_section.new_line()
+        
+        # print("BLENDREMAP: " + str(draw_ib_model.blend_remap))
+        if draw_ib_model.blend_remap:
+            # print("生成BlendRemap相关Buffer:" + draw_ib_model.draw_ib)
+            # BlendRemap相关的Buffer
+            resource_buffer_section.append("[ResourceBlendRemapVertexVGBuffer]")
+            resource_buffer_section.append("type = Buffer")
+            resource_buffer_section.append("format = DXGI_FORMAT_R16_UINT")
+            resource_buffer_section.append("filename = Buffer/" + draw_ib_model.draw_ib + "-" + "BlendRemapVertexVG.buf")
+            resource_buffer_section.new_line()
+
+            resource_buffer_section.append("[ResourceBlendRemapForwardBuffer]")
+            resource_buffer_section.append("type = Buffer")
+            resource_buffer_section.append("format = DXGI_FORMAT_R16_UINT")
+            resource_buffer_section.append("filename = Buffer/" + draw_ib_model.draw_ib + "-" + "BlendRemapForward.buf")
+            resource_buffer_section.new_line()
+
+            resource_buffer_section.append("[ResourceBlendRemapReverseBuffer]")
+            resource_buffer_section.append("type = Buffer")
+            resource_buffer_section.append("format = DXGI_FORMAT_R16_UINT")
+            resource_buffer_section.append("filename = Buffer/" + draw_ib_model.draw_ib + "-" + "BlendRemapReverse.buf")
+            resource_buffer_section.new_line()
+
 
         # ShapeKeyBuffer
         resource_buffer_section.append("[ResourceShapeKeyOffsetBuffer]")
@@ -499,14 +692,14 @@ class ModModelWWMI:
             self.add_constants_section(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             self.add_present_section(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             self.add_commandlist_register_mod_section(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
+            self.add_commandlist_update_merged_skeleton(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
+            self.add_blend_remap_sections(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             self.add_resource_mod_info_section_default(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
+            self.add_texture_override_mark_bone_data_cb(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
+            self.add_commandlist_merge_skeleton_section(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             self.add_commandlist_trigger_shared_cleanup_section(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             self.add_texture_override_component(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
-
-            self.add_commandlist_section(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
-            self.add_texture_override_mark_bone_data_cb(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             self.add_texture_override_shapekeys(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
-
             self.add_resource_shapekeys(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
 
             if Properties_WWMI.import_merged_vgmap():
@@ -515,15 +708,15 @@ class ModModelWWMI:
             self.add_resource_buffer(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
             
             # 移动槽位贴图
-            M_IniHelperV2.move_slot_style_textures(draw_ib_model=draw_ib_model)
+            M_IniHelper.move_slot_style_textures(draw_ib_model=draw_ib_model)
 
             M_GlobalKeyCounter.generated_mod_number = M_GlobalKeyCounter.generated_mod_number + 1
 
-        M_IniHelperV3.add_branch_key_sections(ini_builder=config_ini_builder,key_name_mkey_dict=self.branch_model.keyname_mkey_dict)
+        M_IniHelper.add_branch_key_sections(ini_builder=config_ini_builder,key_name_mkey_dict=self.branch_model.keyname_mkey_dict)
 
         M_IniHelperGUI.add_branch_mod_gui_section(ini_builder=config_ini_builder,key_name_mkey_dict=self.branch_model.keyname_mkey_dict)
 
-        M_IniHelperV2.generate_hash_style_texture_ini(ini_builder=config_ini_builder,drawib_drawibmodel_dict=self.drawib_drawibmodel_dict)
+        M_IniHelper.generate_hash_style_texture_ini(ini_builder=config_ini_builder,drawib_drawibmodel_dict=self.drawib_drawibmodel_dict)
 
         # 保存ini文件，但是按照代码中顺序排列
         config_ini_builder.save_to_file_not_reorder(GlobalConfig.path_generate_mod_folder() + GlobalConfig.workspacename + ".ini")

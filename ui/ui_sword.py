@@ -6,7 +6,7 @@ from bpy.types import Operator, Panel, PropertyGroup, UIList
 from bpy_extras.io_utils import ImportHelper
 import bpy.utils.previews
 
-from ..common.mesh_importer import MigotoBinaryFile, MeshImporter
+from ..importer.mesh_importer import MigotoBinaryFile, MeshImporter
 from ..config.main_config import GlobalConfig
 
 from ..utils.translate_utils import TR
@@ -22,7 +22,7 @@ class Sword_ImportTexture_ImageListItem(PropertyGroup):
     filepath: StringProperty(name="File Path") # type: ignore
 
 # 自定义UI列表显示图片和缩略图
-class Sword_UL_FastImportTextureList(UIList):
+class SWORD_UL_FastImportTextureList(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
         pcoll = preview_collections["main"]
         
@@ -337,7 +337,7 @@ class Sword_ImportTexture_VIEW3D_PT_ImageMaterialPanel(Panel):
         if scene.sword_image_list:
             row = layout.row()
             row.template_list(
-                "SSMT_UL_FastImportTextureList",  # 修正为正确的类名
+                "SWORD_UL_FastImportTextureList",  # 修正为正确的类名
                 "Image List", 
                 scene, 
                 "sword_image_list", 

@@ -1,35 +1,38 @@
 import struct
 import numpy
+import os
 
 
-
-from ..common.migoto_format import *
+from dataclasses import dataclass, field
 
 from ..utils.config_utils import ConfigUtils
 from ..utils.collection_utils import *
-from ..config.main_config import *
-from ..utils.json_utils import *
 from ..utils.timer_utils import TimerUtils
-from ..utils.format_utils import Fatal
+from ..config.main_config import *
+# removed unused imports: json utils, timer utilities and Fatal formatter
 from ..utils.obj_utils import *
 from ..utils.shapekey_utils import ShapeKeyUtils
 from ..utils.log_utils import LOG
+from ..utils.vertexgroup_utils import VertexGroupUtils
+from ..utils.format_utils import FormatUtils
 
 from .extracted_object import ExtractedObject, ExtractedObjectHelper
-from ..common.migoto_format import M_DrawIndexed,ObjDataModel
-from ..config.import_config import ImportConfig
-from .obj_buffer_model import ObjBufferModel
-
-from .branch_model import BranchModel
+from ..base.obj_data_model import ObjDataModel
+from ..base.component_model import ComponentModel
+from ..base.d3d11_gametype import D3D11GameType
+from ..base.m_draw_indexed import M_DrawIndexed
 
 from ..config.properties_wwmi import Properties_WWMI
+from ..config.import_config import ImportConfig
 
-class ComponentModel:
+from .obj_element_model import ObjElementModel
+from .obj_buffer_model_wwmi import ObjBufferModelWWMI
+from .branch_model import BranchModel
+from .obj_writer import ObjWriter
 
-    def __init__(self):
-        self.component_name:str = ""
-        self.final_ordered_draw_obj_model_list:list[ObjDataModel]= []
 
+
+@dataclass
 class DrawIBModelWWMI:
     '''
     这个代表了一个DrawIB的Mod导出模型
@@ -37,27 +40,51 @@ class DrawIBModelWWMI:
     每个游戏的DrawIBModel都是不同的，但是一部分是可以复用的
     (例如WWMI就有自己的一套DrawIBModel) 
     '''
+    draw_ib: str
+    branch_model: BranchModel
 
-    # 通过default_factory让每个类的实例的变量分割开来，不再共享类的静态变量
-    def __init__(self,draw_ib:str,branch_model:BranchModel):
+    draw_ib_alias: str = field(init=False)
+    # ImportConfig 需要传入 draw_ib 参数，因此不要在这里用 default_factory 自动实例化
+    import_config: ImportConfig = field(init=False)
+    d3d11GameType: D3D11GameType = field(init=False)
+    extracted_object: ExtractedObject = field(init=False)
+
+    # 仅类的内部使用
+    _component_model_list: list[ObjDataModel] = field(init=False,default_factory=list)
+    
+    component_name_component_model_dict: dict[str, ComponentModel] = field(init=False,default_factory=dict)
+
+    # 每个DrawIB都有总的顶点数，对应CategoryBuffer里的顶点数。
+    mesh_vertex_count:int = field(init=False,default=0)
+
+    merged_object:MergedObject = field(init=False)
+    obj_name_drawindexed_dict:dict[str,M_DrawIndexed] = field(init=False,default_factory=dict)
+
+    # 是否启用Blend Remap技术
+    blend_remap:bool = field(init=False,default=False)
+    
+    obj_buffer_model_wwmi:ObjBufferModelWWMI = field(init=False,default=False)
+    
+    blend_remap_maps:dict = field(init=False,default_factory=dict)
+    # Per-component boolean: component name -> whether that component uses remap
+    blend_remap_used: dict = field(init=False, default_factory=dict)
+
+    def __post_init__(self):
         # (1) 读取工作空间下的Config.json来设置当前DrawIB的别名
         draw_ib_alias_name_dict = ConfigUtils.get_draw_ib_alias_name_dict()
-        self.draw_ib = draw_ib
-        self.draw_ib_alias = draw_ib_alias_name_dict.get(draw_ib,draw_ib)
-
+        self.draw_ib_alias = draw_ib_alias_name_dict.get(self.draw_ib,self.draw_ib)
         # (2) 读取工作空间中配置文件的配置项
         self.import_config = ImportConfig(draw_ib=self.draw_ib)
         self.d3d11GameType:D3D11GameType = self.import_config.d3d11GameType
+        
         # 读取WWMI专属配置
         self.extracted_object:ExtractedObject = ExtractedObjectHelper.read_metadata(GlobalConfig.path_extract_gametype_folder(draw_ib=self.draw_ib,gametype_name=self.d3d11GameType.GameTypeName)  + "Metadata.json")
 
-        '''
-        这里是要得到每个Component对应的obj_data_model列表
-        '''
-        self.ordered_obj_data_model_list:list[ObjDataModel] = branch_model.get_obj_data_model_list_by_draw_ib(draw_ib=draw_ib)
+        # 这里是要得到每个Component对应的obj_data_model列表
+        self.ordered_obj_data_model_list:list[ObjDataModel] = self.branch_model.get_obj_data_model_list_by_draw_ib(draw_ib=self.draw_ib)
         
-        # (3) 组装成特定格式？
-        self.component_model_list:list[ComponentModel] = []
+        # (3) 组装成特定格式
+        self._component_model_list:list[ComponentModel] = []
         self.component_name_component_model_dict:dict[str,ComponentModel] = {}
 
         for part_name in self.import_config.part_name_list:
@@ -68,28 +95,11 @@ class DrawIBModelWWMI:
                     component_obj_data_model_list.append(obj_data_model)
                     print("obj_data_model: " + obj_data_model.obj_name)
 
-            component_model = ComponentModel()
-            component_model.component_name = "Component " + part_name
-            component_model.final_ordered_draw_obj_model_list = component_obj_data_model_list
-            self.component_model_list.append(component_model)
+            component_model = ComponentModel(component_name="Component " + part_name,final_ordered_draw_obj_model_list=component_obj_data_model_list)
+            
+            self._component_model_list.append(component_model)
             self.component_name_component_model_dict[component_model.component_name] = component_model
         LOG.newline()
-
-        # TODO 在这里遍历获取每个Component的obj列表，然后对这些obj进行统计，统计BLENDINDICES和BLENDWEIGHTS
-        # 生成BlendRemapForward.buf中的内容
-        # 每个Component 512个内容，每512个数字为一组，有几个Component就有几组 格式：R16_UINT
-        # 对应的位数就是局部顶点索引
-        # 对应的位上的内容就是原始的顶点组索引
-        
-        # 需要一个方法，能够获取指定obj的所有的d3d11Element内容。
-        # 也就是说之前的方法基本上都得重写，因为之前是基于当前选中的obj来进行格式转换的。
-        # 其次就是可能要考虑到先声明数据类型，后进行执行的问题，比如WWMI就是把所有的数据类型提前全部声明好
-        # 最后需要的时候只执行一次就把所有的内容都拿到了，本质上是数据类型设计的比较好。
-        
-
-
-        # (4) 根据之前解析集合架构的结果，读取obj对象内容到字典中
-        self.mesh_vertex_count = 0 # 每个DrawIB都有总的顶点数，对应CategoryBuffer里的顶点数。
 
         # (5) 对所有obj进行融合，得到一个最终的用于导出的临时obj
         self.merged_object = self.build_merged_object(
@@ -107,7 +117,7 @@ class DrawIBModelWWMI:
                 self.obj_name_drawindexed_dict[comp_obj.name] = draw_indexed_obj
         
         # (7) 填充到component_name为key的字典中，方便后续操作
-        for component_model in self.component_model_list:
+        for component_model in self._component_model_list:
             new_ordered_obj_model_list = []
             for obj_model in component_model.final_ordered_draw_obj_model_list:
                 obj_model.drawindexed_obj = self.obj_name_drawindexed_dict[obj_model.obj_name]
@@ -115,116 +125,275 @@ class DrawIBModelWWMI:
             component_model.final_ordered_draw_obj_model_list = new_ordered_obj_model_list
             self.component_name_component_model_dict[component_model.component_name] = component_model
         
-        # (8) 选中当前融合的obj对象，计算得到ib和category_buffer，以及每个IndexId对应的VertexId
-        merged_obj = self.merged_object.object
+        # 创建obj_element_model
+        obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11GameType, obj_name=self.merged_object.object.name)
 
-        merged_obj.name
+        # 如果使用了remap技术则替换Remap
+        if self.blend_remap:
+            self.replace_remapped_blendindices(obj_element_model)
+
+        # 上面替换完了remap这里才填充为最终的ndarray
+        obj_element_model.fill_into_element_vertex_ndarray()
+
+        # 然后才能创建ObjBufferModelWWMI
+        self.obj_buffer_model_wwmi = ObjBufferModelWWMI(obj_element_model=obj_element_model)
+
+        if self.blend_remap:
+            # 写出原始未经任何改动的BLENDINDICES到BlendRemapVertexVG.buf, 格式为uint16_t
+            index_vertex_id_dict = self.obj_buffer_model_wwmi.index_vertex_id_dict
+            # 获取真实的VG通道数量
+            num_vgs = self.d3d11GameType.get_blendindices_count_wwmi()
+
+            # 初始化数组
+            vg_array = numpy.zeros((len(index_vertex_id_dict), num_vgs), dtype=numpy.uint16)
+
+            # Reconstruct per-unique-row original (pre-remap) BLENDINDICES by
+            # sampling `obj_element_model.original_elementname_data_dict['BLENDINDICES']`
+            # at the same loop indices used by ObjBufferModelWWMI when it built
+            # `unique_element_vertex_ndarray`.
+            # Strict path: require `unique_first_loop_indices` and original parsed BLENDINDICES.
+            # If either is missing, skip writing the aligned BlendRemapVertexVG file and log a warning.
+            original_blendindices = obj_element_model.original_elementname_data_dict['BLENDINDICES']
+            sampled_blendindices = original_blendindices[self.obj_buffer_model_wwmi.unique_first_loop_indices]
+            # Always treat sampled_blendindices as 2D (channels in axis=1).
+            # If it's 1D (single channel), reshape to (N,1) so the same loop works.
+            if getattr(sampled_blendindices, 'ndim', 1) == 1:
+                sampled_blendindices = sampled_blendindices.reshape(-1, 1)
+            for i in range(min(num_vgs, sampled_blendindices.shape[1])):
+                vg_array[:, i] = sampled_blendindices[:, i].astype(numpy.uint16)
+            # 写出到文件
+            ObjWriter.write_buf_blendindices_uint16(vg_array, self.draw_ib + "-BlendRemapVertexVG.buf")
+
+        # 写出Index.buf
+        ObjWriter.write_buf_ib_r32_uint(self.obj_buffer_model_wwmi.ib,self.draw_ib + "-Component1.buf")
+
+        # 传入 index_vertex_id_dict 以便在需要 remap 时能够知道每个唯一顶点对应的原始顶点 id
+        self.write_out_category_buffer(category_buffer_dict=self.obj_buffer_model_wwmi.category_buffer_dict)
         
-        TimerUtils.Start("构建ObjBufferModel")
-        obj_buffer_model = ObjBufferModel(d3d11_game_type=self.d3d11GameType,obj_name=merged_obj.name)
-        TimerUtils.End("构建ObjBufferModel")
+        # 写出ShapeKey相关Buffer文件
+        if self.obj_buffer_model_wwmi.export_shapekey:
+            ObjWriter.write_buf_shapekey_offsets(self.obj_buffer_model_wwmi.shapekey_offsets,self.draw_ib + "-" + "ShapeKeyOffset.buf")
+            ObjWriter.write_buf_shapekey_vertex_ids(self.obj_buffer_model_wwmi.shapekey_vertex_ids,self.draw_ib + "-" + "ShapeKeyVertexId.buf")
+            ObjWriter.write_buf_shapekey_vertex_offsets(self.obj_buffer_model_wwmi.shapekey_vertex_offsets,self.draw_ib + "-" + "ShapeKeyVertexOffset.buf")
 
-        # 写出到文件
-        self.write_out_index_buffer(ib=obj_buffer_model.ib)
-        self.write_out_category_buffer(category_buffer_dict=obj_buffer_model.category_buffer_dict)
-        self.write_out_shapekey_buffer(merged_obj=merged_obj, index_vertex_id_dict=obj_buffer_model.index_vertex_id_dict)
-
-        # TODO 如果Merged架构下，顶点组数量超过了255，则必须使用Remap技术
-        # 则必须判断每个Component，但是这里已经获取不到每个Component的数据了。
-        # 所以必须往前几个步骤去想办法
-        
         # 删除临时融合的obj对象
-        bpy.data.objects.remove(merged_obj, do_unlink=True)
+        bpy.data.objects.remove(self.merged_object.object, do_unlink=True)
 
 
-    def write_out_index_buffer(self,ib):
-        buf_output_folder = GlobalConfig.path_generatemod_buffer_folder()
+    def export_blendremap_forward_and_reverse(self, components_objs):
+        output_dir = GlobalConfig.path_generatemod_buffer_folder()
+        
+        # Determine number of VG channels from game type
+        num_vgs = self.d3d11GameType.get_blendindices_count_wwmi()
 
-        packed_data = struct.pack(f'<{len(ib)}I', *ib)
-        with open(buf_output_folder + self.draw_ib + "-Component1.buf", 'wb') as ibf:
-            ibf.write(packed_data) 
+        blend_remap_forward = numpy.empty(0, dtype=numpy.uint16)
+        blend_remap_reverse = numpy.empty(0, dtype=numpy.uint16)
+        remapped_vgs_counts = []
 
-    def write_out_category_buffer(self,category_buffer_dict):
-        __categoryname_bytelist_dict = {} 
+        # Per-component remap maps: { component_name: { 'forward': [orig_vg_ids], 'reverse': {orig->local} } }
+        remap_maps: dict[str, dict] = {}
+        # Per-component boolean indicating whether remap was used for that component
+        remap_used: dict[str, bool] = {}
+
+        any_overflow = False
+
+        for comp_obj in components_objs:
+            # Ensure we have the evaluated mesh/obj available
+            obj = comp_obj
+
+            # Build per-vertex VG id array for this component
+            vert_vg_ids = numpy.zeros((len(obj.data.vertices), num_vgs), dtype=numpy.uint16)
+
+            # For remap calculation collect used VG ids for vertices referenced by this component
+            used_vg_set = set()
+
+            for vi, v in enumerate(obj.data.vertices):
+                # vertex.groups is a sequence of group assignments (group index, weight)
+                groups = [(g.group, g.weight) for g in v.groups]
+                # sort by weight descending and keep top `num_vgs`
+                if len(groups) > 0:
+                    groups.sort(key=lambda x: x[1], reverse=True)
+                    for i, (gidx, w) in enumerate(groups[:num_vgs]):
+                        vert_vg_ids[vi, i] = int(gidx)
+                        if w > 0:
+                            used_vg_set.add(int(gidx))
+
+            # Determine whether remapping is needed for this component
+            max_used = (max(used_vg_set) if len(used_vg_set) else 0)
+            if len(used_vg_set) == 0 or max_used < 256:
+                # No remapping required for this component
+                remapped_vgs_counts.append(0)
+                remap_maps[comp_obj.name] = { 'forward': [], 'reverse': {} }
+                remap_used[comp_obj.name] = False
+                continue
+            else:
+                any_overflow = True
+
+            # Create forward and reverse remap arrays (512 entries each, uint16)
+            obj_vg_ids = numpy.array(sorted(used_vg_set), dtype=numpy.uint16)
+
+            forward = numpy.zeros(512, dtype=numpy.uint16)
+            forward[:len(obj_vg_ids)] = obj_vg_ids
+
+            reverse = numpy.zeros(512, dtype=numpy.uint16)
+            # reverse maps original vg id -> compact id (index in obj_vg_ids)
+            reverse[obj_vg_ids] = numpy.arange(len(obj_vg_ids), dtype=numpy.uint16)
+
+            blend_remap_forward = numpy.concatenate((blend_remap_forward, forward), axis=0)
+            blend_remap_reverse = numpy.concatenate((blend_remap_reverse, reverse), axis=0)
+            remapped_vgs_counts.append(len(obj_vg_ids))
+            # build simple python mapping structures for later remap usage
+            forward_list = [int(x) for x in obj_vg_ids.tolist()]
+            reverse_map = { int(v): int(i) for i, v in enumerate(forward_list) }
+            remap_maps[comp_obj.name] = { 'forward': forward_list, 'reverse': reverse_map }
+            remap_used[comp_obj.name] = True
+
+        if blend_remap_forward.size != 0:
+            with open(os.path.join(output_dir, f"{self.draw_ib}-BlendRemapForward.buf"), 'wb') as f:
+                blend_remap_forward.tofile(f)
+
+        if blend_remap_reverse.size != 0:
+            with open(os.path.join(output_dir, f"{self.draw_ib}-BlendRemapReverse.buf"), 'wb') as f:
+                blend_remap_reverse.tofile(f)
+
+        # Expose the remap maps on the instance for later use (original vg id -> local compact id)
+        self.blend_remap_maps = remap_maps
+        # also expose which components actually used remapping
+        self.blend_remap_used = remap_used
+
+        # If any component used VG ids >= 256, enable global blend_remap
+        if any_overflow:
+            self.blend_remap = True
+
+ 
+
+    def replace_remapped_blendindices(self, obj_element_model: ObjElementModel):
+        """
+        使用已经生成的 self.blend_remap_maps 将 obj_element_model.element_vertex_ndarray['BLENDINDICES']
+        中的全局顶点组索引替换为对应 component 的局部（compact）索引。
+
+        过程：
+        - 构建 loop -> polygon 的映射
+        - 构建 polygon -> 原始 component object name 的映射（使用 components[*].objects[*].index_offset 和 index_count）
+        - 对每个 loop 的 BLENDINDICES 条目，使用对应 component 的 reverse 映射表进行替换
+        """
+        import numpy as _np
+
+        if not hasattr(self, 'blend_remap_maps') or not self.blend_remap_maps:
+            return
+
+        # We prefer to operate on the parsed per-element arrays stored in
+        # `original_elementname_data_dict` and write remapped results into
+        # `final_elementname_data_dict`. This avoids mutating the original
+        # parsed arrays and defers packing until callers call
+        # `fill_into_element_vertex_ndarray()`.
+
+        mesh = obj_element_model.mesh
+        loops_len = obj_element_model.mesh_loops_length
+
+        # Build loop -> polygon mapping
+        loop_to_poly = _np.empty(loops_len, dtype=_np.int32)
+        for poly in mesh.polygons:
+            start = poly.loop_start
+            end = start + poly.loop_total
+            loop_to_poly[start:end] = poly.index
+
+        arr = None
+        # Source array: original parsed dict if present
+        if 'BLENDINDICES' in getattr(obj_element_model, 'original_elementname_data_dict', {}):
+            # copy to avoid mutating the original
+            src = obj_element_model.original_elementname_data_dict['BLENDINDICES']
+            arr = src.copy()
+        elif hasattr(obj_element_model, 'element_vertex_ndarray') and 'BLENDINDICES' in obj_element_model.element_vertex_ndarray.dtype.names:
+            # If the caller has already packed, take a copy of the packed ndarray
+            arr = obj_element_model.element_vertex_ndarray['BLENDINDICES'].copy()
+
+        if arr is None:
+            # Nothing to remap
+            return
+
+        # 2) polygon -> component object name mapping
+        poly_count = len(mesh.polygons)
+        polygon_to_objname = [None] * poly_count
+
+        for comp in self.merged_object.components:
+            for temp_obj in comp.objects:
+                if not hasattr(temp_obj, 'index_offset') or not hasattr(temp_obj, 'index_count'):
+                    continue
+                poly_start = int(temp_obj.index_offset // 3)
+                poly_end = poly_start + int(temp_obj.index_count // 3)
+                for p in range(poly_start, poly_end):
+                    if 0 <= p < poly_count:
+                        polygon_to_objname[p] = temp_obj.name
+
+        # Determine width (number of indices per entry)
+        if getattr(arr, 'ndim', 1) == 1:
+            width = 1
+        else:
+            width = arr.shape[1]
+
+        for li in range(loops_len):
+            poly_idx = int(loop_to_poly[li])
+            comp_obj_name = polygon_to_objname[poly_idx] if (0 <= poly_idx < len(polygon_to_objname)) else None
+            if not comp_obj_name:
+                continue
+            remap_entry = self.blend_remap_maps.get(comp_obj_name, None)
+            if not remap_entry:
+                continue
+            reverse_map = remap_entry.get('reverse', {})
+
+            if width == 1:
+                orig = int(arr[li])
+                new = reverse_map.get(orig, orig)
+                arr[li] = new
+            else:
+                for j in range(width):
+                    orig = int(arr[li, j])
+                    new = reverse_map.get(orig, orig)
+                    arr[li, j] = new
+
+        obj_element_model.final_elementname_data_dict['BLENDINDICES'] = arr
+
+        print("Applied BLENDINDICES remap and wrote results into final_elementname_data_dict")
+ 
+
+
+
+    def write_out_category_buffer(self, category_buffer_dict):
+        __categoryname_bytelist_dict = {}
         for category_name in self.d3d11GameType.OrderedCategoryNameList:
             if category_name not in __categoryname_bytelist_dict:
-                __categoryname_bytelist_dict[category_name] =  category_buffer_dict[category_name]
+                __categoryname_bytelist_dict[category_name] = category_buffer_dict[category_name]
             else:
                 existing_array = __categoryname_bytelist_dict[category_name]
                 buffer_array = category_buffer_dict[category_name]
 
-                # 确保两个数组都是NumPy数组
                 existing_array = numpy.asarray(existing_array)
                 buffer_array = numpy.asarray(buffer_array)
 
-                # 使用 concatenate 连接两个数组，确保传递的是一个序列（如列表或元组）
                 concatenated_array = numpy.concatenate((existing_array, buffer_array))
-
-                # 更新字典中的值
                 __categoryname_bytelist_dict[category_name] = concatenated_array
 
-        # 顺便计算一下步长得到总顶点数
         position_stride = self.d3d11GameType.CategoryStrideDict["Position"]
         position_bytelength = len(__categoryname_bytelist_dict["Position"])
-        self.mesh_vertex_count = int(position_bytelength/position_stride)
+        self.mesh_vertex_count = int(position_bytelength / position_stride)
 
         buf_output_folder = GlobalConfig.path_generatemod_buffer_folder()
-            
+
         for category_name, category_buf in __categoryname_bytelist_dict.items():
             buf_path = buf_output_folder + self.draw_ib + "-" + category_name + ".buf"
-             # 将 list 转换为 numpy 数组
-            # category_array = numpy.array(category_buf, dtype=numpy.uint8)
             with open(buf_path, 'wb') as ibf:
                 category_buf.tofile(ibf)
 
-    def write_out_shapekey_buffer(self,merged_obj,index_vertex_id_dict):
-        buf_output_folder = GlobalConfig.path_generatemod_buffer_folder()
 
-        self.shapekey_offsets = []
-        self.shapekey_vertex_ids = []
-        self.shapekey_vertex_offsets = []
-
-        # (11) 拼接ShapeKey数据
-        if merged_obj.data.shape_keys is None or len(getattr(merged_obj.data.shape_keys, 'key_blocks', [])) == 0:
-            print(f'No shapekeys found to process!')
-        else:
-            shapekey_offsets,shapekey_vertex_ids,shapekey_vertex_offsets_np = ShapeKeyUtils.extract_shapekey_data(merged_obj=merged_obj,index_vertex_id_dict=index_vertex_id_dict)
-            # extract_shapekey_data_v2
-            # shapekey_offsets,shapekey_vertex_ids,shapekey_vertex_offsets_np = ShapeKeyUtils.extract_shapekey_data_v2(mesh=mesh,index_vertex_id_dict=index_vertex_id_dict)
-
-            self.shapekey_offsets = shapekey_offsets
-            self.shapekey_vertex_ids = shapekey_vertex_ids
-            self.shapekey_vertex_offsets = shapekey_vertex_offsets_np
-
-            # 鸣潮的ShapeKey三个Buffer的导出
-            if len(self.shapekey_offsets) != 0:
-                with open(buf_output_folder + self.draw_ib + "-" + "ShapeKeyOffset.buf", 'wb') as file:
-                    for number in self.shapekey_offsets:
-                        # 假设数字是32位整数，使用'i'格式符
-                        # 根据实际需要调整数字格式和相应的格式符
-                        data = struct.pack('i', number)
-                        file.write(data)
             
-            if len(self.shapekey_vertex_ids) != 0:
-                with open(buf_output_folder + self.draw_ib + "-" + "ShapeKeyVertexId.buf", 'wb') as file:
-                    for number in self.shapekey_vertex_ids:
-                        # 假设数字是32位整数，使用'i'格式符
-                        # 根据实际需要调整数字格式和相应的格式符
-                        data = struct.pack('i', number)
-                        file.write(data)
-            
-            if len(self.shapekey_vertex_offsets) != 0:
-                # 将列表转换为numpy数组，并改变其数据类型为float16
-                float_array = numpy.array(self.shapekey_vertex_offsets, dtype=numpy.float32).astype(numpy.float16)
-                with open(buf_output_folder + self.draw_ib + "-" + "ShapeKeyVertexOffset.buf", 'wb') as file:
-                    float_array.tofile(file)
+
 
     def build_merged_object(self,extracted_object:ExtractedObject):
         '''
         extracted_object 用于读取配置
         
-        这个代码有个问题就是，它只是面向一个DrawIB的，所以在调用的时候得在branch_model的drawib循环中调用，对每个drawib都生成临时obj
-        然后生成mod
+        此方法用于为当前DrawIB构建MergedObj对象
         '''
         print("build_merged_object::")
 
@@ -241,33 +410,34 @@ class DrawIBModelWWMI:
         # 2.import_objects_from_collection
         # 这里是获取所有的obj，需要用咱们的方法来进行集合架构的遍历获取所有的obj
         # Nico: 添加缓存机制，一个obj只处理一次
+        workspace_collection = bpy.context.collection
+
         processed_obj_name_list:list[str] = []
-        for component_model in self.component_model_list:
+        for component_model in self._component_model_list:
+            component_count = str(component_model.component_name)[10:]
+            print("ComponentCount: " + component_count)
+
+            # 这里减去1是因为我们的Compoennt是从1开始的,但是WWMITools的逻辑是从0开始的
+            component_id = int(component_count) - 1 
+            print("component_id: " + str(component_id))
+            
             for obj_data_model in component_model.final_ordered_draw_obj_model_list:
                 obj_name = obj_data_model.obj_name
+                print("obj_name: " + obj_name)
                 
                 # Nico: 如果已经处理过这个obj，则跳过
                 if obj_name in processed_obj_name_list:
                     print(f"Skipping already processed object: {obj_name}")
                     continue
-
                 processed_obj_name_list.append(obj_name)
 
-                obj = bpy.data.objects.get(obj_name)
-                # 跳过不满足component开头的对象
+                obj = ObjUtils.get_obj_by_name(obj_name)
 
-                print("obj_name: " + obj_name)
-                component_count = str(component_model.component_name)[10:]
-                print("ComponentCount: " + component_count)
-
-                component_id = int(component_count) - 1 # 这里减去1是因为我们的Compoennt是从1开始的
-                print("component_id: " + str(component_id))
-
-                workspace_collection = bpy.context.collection
-
+                # 复制出一个TEMP_为前缀的obj出来
                 # 这里我们设置collection为None，不链接到任何集合中，防止干扰
                 temp_obj = ObjUtils.copy_object(bpy.context, obj, name=f'TEMP_{obj.name}', collection=workspace_collection)
 
+                # 添加到当前component的objects列表中，添加的是复制出来的TEMP_的obj
                 try:
                     components[component_id].objects.append(TempObject(
                         name=obj.name,
@@ -281,7 +451,8 @@ class DrawIBModelWWMI:
         index_offset = 0
         # 这里的component_id是从0开始的，务必注意
         for component_id, component in enumerate(components):
-
+            
+            # 排序以确保obj的命名符合规范而不是根据集合中的位置来进行
             component.objects.sort(key=lambda x: x.name)
 
             for temp_object in component.objects:
@@ -308,10 +479,10 @@ class DrawIBModelWWMI:
                         ShapeKeyUtils.apply_modifiers_for_object_with_shape_keys(bpy.context, selected_modifiers, None)
 
                 # Triangulate temporary object, this step is crucial as export supports only triangles
-                triangulate_object(bpy.context, temp_obj)
+                ObjUtils.triangulate_object(bpy.context, temp_obj)
 
                 # Handle Vertex Groups
-                vertex_groups = get_vertex_groups(temp_obj)
+                vertex_groups = ObjUtils.get_vertex_groups(temp_obj)
 
                 # Remove ignored or unexpected vertex groups
                 if Properties_WWMI.import_merged_vgmap():
@@ -327,7 +498,7 @@ class DrawIBModelWWMI:
                 remove_vertex_groups(temp_obj, ignore_list)
 
                 # Rename VGs to their indicies to merge ones of different components together
-                for vg in get_vertex_groups(temp_obj):
+                for vg in ObjUtils.get_vertex_groups(temp_obj):
                     vg.name = str(vg.index)
 
                 # Calculate vertex count of temporary object
@@ -342,43 +513,69 @@ class DrawIBModelWWMI:
                 component.vertex_count += temp_object.vertex_count
                 component.index_count += temp_object.index_count
 
+
+
+
+
         # build_merged_object:
+        drawib_merged_object = []
+        drawib_vertex_count, drawib_index_count = 0, 0
 
-        merged_object = []
-        vertex_count, index_count = 0, 0
+        component_obj_list = []
         for component in components:
-            for temp_object in component.objects:
-                merged_object.append(temp_object.object)
-            vertex_count += component.vertex_count
-            index_count += component.index_count
             
-        join_objects(bpy.context, merged_object)
+            component_merged_object:list[bpy.types.Object] = []
 
-        obj = merged_object[0]
+            # for temp_object in component.objects:
+            #     drawib_merged_object.append(temp_object.object)
+            # 改为先把component的obj组合在一起，得到当前component的obj
+            # 然后就能获取每个component是否使用remap技术的信息了
+            # 然后最后再融合到drawib级别的mergedobj中，也不影响最终结果
+            for temp_object in component.objects:
+                component_merged_object.append(temp_object.object)
 
-        rename_object(obj, 'TEMP_EXPORT_OBJECT')
+            ObjUtils.join_objects(bpy.context, component_merged_object)
+
+            component_obj = component_merged_object[0]
+            component_obj_list.append(component_obj)
+            
+            drawib_merged_object.append(component_obj)
+
+            drawib_vertex_count += component.vertex_count
+            drawib_index_count += component.index_count
+        
+        # 获取到component_obj_list后，直接就能导出BlendRemap的Forward和Reverse了
+        self.export_blendremap_forward_and_reverse(component_obj_list)
+
+        ObjUtils.join_objects(bpy.context, drawib_merged_object)
+
+        obj = drawib_merged_object[0]
+
+        ObjUtils.rename_object(obj, 'TEMP_EXPORT_OBJECT')
 
         deselect_all_objects()
         select_object(obj)
         set_active_object(bpy.context, obj)
 
-        mesh = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh()
+        mesh = ObjUtils.get_mesh_evaluate_from_obj(obj)
 
-        merged_object = MergedObject(
+        drawib_merged_object = MergedObject(
             object=obj,
             mesh=mesh,
             components=components,
             vertex_count=len(obj.data.vertices),
             index_count=len(obj.data.polygons) * 3,
-            vg_count=len(get_vertex_groups(obj)),
+            vg_count=len(ObjUtils.get_vertex_groups(obj)),
             shapekeys=MergedObjectShapeKeys(),
         )
 
-        if vertex_count != merged_object.vertex_count:
+        if drawib_vertex_count != drawib_merged_object.vertex_count:
             raise ValueError('vertex_count mismatch between merged object and its components')
 
-        if index_count != merged_object.index_count:
+        if drawib_index_count != drawib_merged_object.index_count:
             raise ValueError('index_count mismatch between merged object and its components')
         
         LOG.newline()
-        return merged_object
+        return drawib_merged_object
+
+
