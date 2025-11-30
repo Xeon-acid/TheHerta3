@@ -204,7 +204,19 @@ class ModModelWWMI:
                     blend_remap_section.append("$\\WWMIv1\\blend_remap_id = " + str(blend_remap_id))
 
                     component_count = int(component_tmp_obj_name.split("-")[1]) - 1
-                    vg_count = draw_ib_model.extracted_object.components[component_count].vg_count
+
+                    for x in draw_ib_model.extracted_object.components:
+                        print(x.vg_count)
+                    # 注意这里有问题
+                    # 如果使用了REMAP技术，或者发生了顶点组合并现象，也就是把其他的Component合并到这个Component上了
+                    # 就会导致这里的获取的原始的顶点组数量对不上
+                    # 一般情况下会小于真实的顶点组数量
+                    # 所以这里的值需要更新为，每个Compoennt实际使用到的顶点组的数量
+                    # 所以就需要提前记录所有的Component真实的VGCount，且是移除了空顶点组之后的
+                    # vg_count = draw_ib_model.extracted_object.components[component_count].vg_count
+
+                    vg_count = draw_ib_model.component_real_vg_count_dict[component_count]
+
                     # 从 extracted_object 中读取预先记录的 vg_count（此处代表该 component 总的 VG 数量）
                     blend_remap_section.append("$\\WWMIv1\\vg_count = " + str(vg_count))
                     blend_remap_section.append("cs-t38 = ResourceMergedSkeletonRemap")

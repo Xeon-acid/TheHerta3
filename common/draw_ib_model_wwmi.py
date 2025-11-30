@@ -69,6 +69,9 @@ class DrawIBModelWWMI:
     # Per-component boolean: component name -> whether that component uses remap
     blend_remap_used: dict = field(init=False, default_factory=dict)
 
+    # 存储每个Component实际使用的顶点组数量（排除空顶点组后）
+    component_real_vg_count_dict: dict[int, int] = field(init=False, default_factory=dict)
+
     def __post_init__(self):
         # (1) 读取工作空间下的Config.json来设置当前DrawIB的别名
         draw_ib_alias_name_dict = ConfigUtils.get_draw_ib_alias_name_dict()
@@ -447,6 +450,33 @@ class DrawIBModelWWMI:
                     print(f"Error appending object to component: {e}")
 
         print("准备临时对象::")
+        # Nico: 修复VGCount不准确的问题
+        # 如果使用了REMAP技术，或者发生了顶点组合并现象，也就是把其他的Component合并到这个Component上了
+        # 就会导致这里的获取的原始的顶点组数量对不上
+        # 一般情况下会小于真实的顶点组数量
+        # 所以这里的值需要更新为，每个Compoennt实际使用到的顶点组的数量
+        # 所以就需要提前记录所有的Component真实的VGCount，且是排除了空顶点组之后的
+        self.component_real_vg_count_dict = {}
+        for component_id, component in enumerate(components):
+            max_vg_count = 0
+            for temp_object in component.objects:
+                temp_obj = temp_object.object
+                
+                # 计算实际使用的顶点组数量（排除空顶点组）
+                # 注意：不能直接修改temp_obj，所以不能用VertexGroupUtils.remove_unused_vertex_groups
+                used_vg_indices = set()
+                for v in temp_obj.data.vertices:
+                    for g in v.groups:
+                        if g.weight > 0.0:
+                            used_vg_indices.add(g.group)
+                real_vg_count = len(used_vg_indices)
+
+                if real_vg_count > max_vg_count:
+                    max_vg_count = real_vg_count
+            
+            self.component_real_vg_count_dict[component_id] = max_vg_count
+            print(f"Calculated real vg_count for Component {component_id}: {max_vg_count}")
+
         # 3.准备临时对象
         index_offset = 0
         # 这里的component_id是从0开始的，务必注意
